@@ -1,0 +1,13 @@
+{
+  "name": "catalogo-whatsapp-app",
+  "version": "6.11.0",
+  "description": "Catálogo de productos para WhatsApp (Paradise Shop) empaquetado como app Android",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}
