@@ -644,8 +644,12 @@
             <option value="auto">Automático (según el estilo)</option>
             <option value="tag">Etiqueta blanca</option>
             <option value="pill">Pastilla de color</option>
+            <option value="hangtag">Etiqueta colgante (con agujero)</option>
+            <option value="circle">Insignia circular</option>
+            <option value="burst">Estallido cómic</option>
             <option value="plain">Solo texto (sin fondo)</option>
           </select>
+          <div class="hint tip" style="margin-top:4px;">Elegir cualquier opción que no sea "Automático" reemplaza el precio en TODAS las tarjetas, sin importar el estilo. Cambia y mira la vista previa para decidir cuál te gusta más.</div>
 
           <label style="margin-top:8px;">Posición del precio</label>
           <select id="cfgPricePos">
@@ -3590,6 +3594,38 @@ function roundRect(ctx,x,y,w,h,r){
   ctx.arcTo(x,y,x+w,y,r);
   ctx.closePath();
 }
+/* Silueta de etiqueta colgante (como las de tienda física): rectángulo con
+   punta triangular a la izquierda y esquinas redondeadas a la derecha.
+   x,y = esquina superior del cuerpo (SIN contar la punta); tipLen = largo de la punta. */
+function hangTagPath(ctx, x, y, w, h, tipLen, r){
+  const midY = y + h/2;
+  ctx.beginPath();
+  ctx.moveTo(x - tipLen, midY);
+  ctx.lineTo(x, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.arcTo(x+w, y, x+w, y+r, r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x, y+h);
+  ctx.closePath();
+}
+/* Estrella/estallido tipo cómic con puntas irregulares (radio alterna un poco
+   entre puntas para que se vea más "explosivo" y menos geométrico perfecto). */
+function burstStarPath(ctx, cx, cy, outerR, innerR, spikes){
+  ctx.beginPath();
+  const step = Math.PI / spikes;
+  let rot = -Math.PI/2;
+  for(let i=0; i<spikes; i++){
+    const rOuter = outerR * (i % 2 === 0 ? 1 : 0.92);
+    const xo = cx + Math.cos(rot) * rOuter, yo = cy + Math.sin(rot) * rOuter;
+    if(i===0) ctx.moveTo(xo, yo); else ctx.lineTo(xo, yo);
+    rot += step;
+    const xi = cx + Math.cos(rot) * innerR, yi = cy + Math.sin(rot) * innerR;
+    ctx.lineTo(xi, yi);
+    rot += step;
+  }
+  ctx.closePath();
+}
 function roundRectTop(ctx,x,y,w,h,r){
   ctx.beginPath();
   ctx.moveTo(x, y+h);
@@ -3989,7 +4025,7 @@ function drawPriceTagGeneric(ctx, cfg, accent, product, anchorBox){
   const priceFontPx = Math.round(60 * T.priceScale);
   const labelFontPx = Math.round(24 * T.priceScale);
 
-  let boxW, boxH;
+  let boxW, boxH, tipLen = 0, badgeR = 0;
   if(bg === "tag"){
     ctx.font = `800 ${labelFontPx}px ${FONT_DISPLAY}`;
     const labelW = ctx.measureText("PRECIO").width;
@@ -4002,6 +4038,22 @@ function drawPriceTagGeneric(ctx, cfg, accent, product, anchorBox){
     const priceW = ctx.measureText(priceText).width;
     boxW = priceW + 66;
     boxH = Math.round(94 * T.priceScale);
+  }else if(bg === "hangtag"){
+    ctx.font = `800 ${priceFontPx}px ${FONT_DISPLAY}`;
+    const priceW = ctx.measureText(priceText).width;
+    boxH = Math.round(96 * T.priceScale);
+    tipLen = Math.round(boxH * 0.55);
+    boxW = priceW + 56 + tipLen; // tipLen incluido para reservar espacio a la izquierda
+  }else if(bg === "circle"){
+    ctx.font = `800 ${Math.round(priceFontPx*0.86)}px ${FONT_DISPLAY}`;
+    const priceW = ctx.measureText(priceText).width;
+    badgeR = Math.max(Math.round(70 * T.priceScale), Math.round((priceW+30)/2));
+    boxW = badgeR*2; boxH = badgeR*2;
+  }else if(bg === "burst"){
+    ctx.font = `800 ${Math.round(priceFontPx*0.82)}px ${FONT_DISPLAY}`;
+    const priceW = ctx.measureText(priceText).width;
+    badgeR = Math.max(Math.round(92 * T.priceScale), Math.round((priceW+40)/1.5));
+    boxW = badgeR*2; boxH = badgeR*2;
   }else{ // plain
     ctx.font = `800 ${priceFontPx}px ${FONT_DISPLAY}`;
     const priceW = ctx.measureText(priceText).width;
@@ -4014,6 +4066,12 @@ function drawPriceTagGeneric(ctx, cfg, accent, product, anchorBox){
   else if(pos === "bl"){ x = anchorBox.left; y = anchorBox.bottom - boxH; }
   else if(pos === "tr"){ x = anchorBox.right - boxW; y = anchorBox.top; }
   else { x = anchorBox.left; y = anchorBox.top; } // tl
+  // la punta de la etiqueta colgante y el aro del círculo/estallido necesitan
+  // un pelín de margen extra para no quedar pegados al borde de la tarjeta
+  if(bg === "hangtag" || bg === "circle" || bg === "burst"){
+    const margin = 6;
+    if(pos === "br" || pos === "tr") x -= margin; else x += margin;
+  }
 
   if(bg === "tag"){
     ctx.save();
@@ -4044,6 +4102,68 @@ function drawPriceTagGeneric(ctx, cfg, accent, product, anchorBox){
     ctx.fillText(priceText, x+boxW/2, y+boxH/2+2);
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
+  }else if(bg === "hangtag"){
+    // el cuerpo del rectángulo empieza después de la punta
+    const bodyX = x + tipLen, bodyW = boxW - tipLen;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8;
+    hangTagPath(ctx, bodyX, y, bodyW, boxH, tipLen, 14);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    hangTagPath(ctx, bodyX, y, bodyW, boxH, tipLen, 14);
+    ctx.lineWidth = 3; ctx.strokeStyle = accent; ctx.stroke();
+    ctx.restore();
+    // agujerito + cordón, como una etiqueta física
+    const holeX = x + tipLen*0.42, holeY = y + boxH/2;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(holeX, holeY, 6, 0, Math.PI*2);
+    ctx.strokeStyle = accent; ctx.lineWidth = 3; ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#111417";
+    ctx.font = `800 ${priceFontPx}px ${FONT_DISPLAY}`;
+    ctx.textBaseline = "middle";
+    ctx.fillText(priceText, bodyX + 26, y + boxH/2 + 2);
+    ctx.textBaseline = "alphabetic";
+  }else if(bg === "circle"){
+    const cx = x + badgeR, cy = y + badgeR;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+    ctx.beginPath(); ctx.arc(cx, cy, badgeR, 0, Math.PI*2);
+    ctx.fillStyle = accent; ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, badgeR-7, 0, Math.PI*2);
+    ctx.lineWidth = 4; ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    const currency = cfg.currency, amount = formatNumber(product.price);
+    ctx.font = `800 ${Math.round(priceFontPx*0.86)}px ${FONT_DISPLAY}`;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(amount, cx, cy + 4);
+    ctx.font = `700 ${Math.round(labelFontPx*0.9)}px ${FONT_DISPLAY}`;
+    try{ ctx.letterSpacing = "1px"; }catch(e){}
+    ctx.fillText(currency.toUpperCase(), cx, cy + 4 + Math.round(labelFontPx*0.95));
+    try{ ctx.letterSpacing = "0px"; }catch(e){}
+    ctx.textAlign = "left";
+  }else if(bg === "burst"){
+    const cx = x + badgeR, cy = y + badgeR;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+    burstStarPath(ctx, cx, cy, badgeR, badgeR*0.72, 11);
+    ctx.fillStyle = accent; ctx.fill();
+    ctx.restore();
+    ctx.save();
+    burstStarPath(ctx, cx, cy, badgeR, badgeR*0.72, 11);
+    ctx.lineWidth = 5; ctx.strokeStyle = "#ffffff"; ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.font = `800 ${Math.round(priceFontPx*0.82)}px ${FONT_DISPLAY}`;
+    ctx.fillText(priceText, cx, cy + Math.round(priceFontPx*0.28));
+    ctx.textAlign = "left";
   }else{ // plain
     ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0.55)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
