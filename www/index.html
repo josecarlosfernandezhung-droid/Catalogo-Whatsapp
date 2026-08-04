@@ -1371,7 +1371,7 @@ function compressImageFile(file, maxDim, quality){
       const ctx = canvas.getContext("2d");
       ctx.drawImage(img, 0, 0, w, h);
       URL.revokeObjectURL(url);
-      canvas.toBlob((blob)=> resolve(blob || file), "image/jpeg", quality);
+      resolve(canvasToBlobSync(canvas, "image/jpeg", quality) || file);
     };
     img.onerror = ()=>{ URL.revokeObjectURL(url); resolve(file); };
     img.src = url;
@@ -1977,7 +1977,7 @@ qs("#btnDownloadCombo").addEventListener("click", async ()=>{
   const blob = await canvasToBlob(canvas);
   const name = qs("#comboName").value.trim() || "combo";
   const filename = safeFileName(name) + "." + exportImageMeta().ext;
-  if(await nativeSaveOrShare(blob, filename, {title: name, savedMessage:"Imagen guardada"})) return;
+  if(await nativeSaveOrShare(blob, filename, {title: name, savedMessage:"Imagen guardada", folder:"Tarjetas"})) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -1991,7 +1991,7 @@ qs("#btnShareCombo").addEventListener("click", async ()=>{
   const name = qs("#comboName").value.trim() || "combo";
   const imeta = exportImageMeta();
   const file = new File([blob], safeFileName(name)+"."+imeta.ext, {type:imeta.mime});
-  if(await nativeSaveOrShare(blob, file.name, {title: name})) return;
+  if(await nativeSaveOrShare(blob, file.name, {title: name, folder:"Tarjetas"})) return;
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{ await navigator.share({files:[file], title:name}); }catch(e){ /* cancelado */ }
   }else{
@@ -2589,7 +2589,7 @@ async function shareCardsOrDownloadZip(files, zipNameBase, shareTitle){
       }
       const zipBlob = buildZip(zipFiles);
       const zipName = zipNameBase + "-" + new Date().toISOString().slice(0,10) + ".zip";
-      if(await nativeSaveOrShare(zipBlob, zipName, {title: shareTitle, savedMessage:"ZIP guardado"})) return;
+      if(await nativeSaveOrShare(zipBlob, zipName, {title: shareTitle, savedMessage:"ZIP guardado", folder:"Tarjetas"})) return;
     }catch(err){
       console.error("Fallo compartiendo de forma nativa, se intenta el método normal:", err);
     }
@@ -3071,6 +3071,7 @@ async function generateSelectedCardFiles(btn, asDocument){
         files.push(new File([blob], name, {type:imeta.mime}));
       }
       productIds.push(p.id);
+      if((idx+1) % 8 === 0) await new Promise(r=>setTimeout(r, 0));
     }
     return { files, productIds };
   }catch(e){
@@ -4256,8 +4257,8 @@ async function renderCardToCanvas(canvas, product){
       img = await new Promise((resolve)=>{
         const image = new Image();
         const url = URL.createObjectURL(blob);
-        image.onload = ()=>{ resolve(image); };
-        image.onerror = ()=> resolve(null);
+        image.onload = ()=>{ URL.revokeObjectURL(url); resolve(image); };
+        image.onerror = ()=>{ URL.revokeObjectURL(url); resolve(null); };
         image.src = url;
       });
     }
@@ -4273,8 +4274,8 @@ async function renderCardToCanvas(canvas, product){
       const gimage = await new Promise((resolve)=>{
         const image = new Image();
         const url = URL.createObjectURL(gblob);
-        image.onload = ()=> resolve(image);
-        image.onerror = ()=> resolve(null);
+        image.onload = ()=>{ URL.revokeObjectURL(url); resolve(image); };
+        image.onerror = ()=>{ URL.revokeObjectURL(url); resolve(null); };
         image.src = url;
       });
       if(gimage) galleryImgs.push(gimage);
@@ -6325,7 +6326,7 @@ async function renderSectionBannerCanvas(title, accent, isNewSection){
   try{ ctx.letterSpacing = "0px"; }catch(e){}
   ctx.textBaseline = "alphabetic";
 
-  const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.9));
+  const blob = canvasToBlobSync(canvas, "image/jpeg", 0.9);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return { bytes, width: W, height: H };
 }
@@ -6390,7 +6391,7 @@ async function renderPdfHeaderCanvas(){
     ctx.fillText(truncateToWidth(ctx, line, textMaxW), tx, ly2);
   });
 
-  const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.9));
+  const blob = canvasToBlobSync(canvas, "image/jpeg", 0.9);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return { bytes, width: W, height: H };
 }
@@ -6418,7 +6419,7 @@ async function renderCoverPageCanvas(){
     await drawCoverLight(ctx, W, H, cfg, accent);
   }
 
-  const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.92));
+  const blob = canvasToBlobSync(canvas, "image/jpeg", 0.92);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return { bytes, width: W, height: H };
 }
@@ -6874,10 +6875,34 @@ qs("#btnResetCardEdit").addEventListener("click", ()=>{
   toast("Datos originales restablecidos");
 });
 
+// Convierte un canvas a Blob de forma SÍNCRONA (via toDataURL), en vez de
+// canvas.toBlob() que es asíncrono y depende de que el navegador programe
+// internamente esa tarea. Dentro del WebView de la app empaquetada, esa
+// tarea a veces se queda esperando sin ejecutarse hasta que hay algún
+// repintado en pantalla (por eso "se quedaba en 6" hasta que se scrolleaba
+// la lista) — toDataURL no tiene ese problema porque se resuelve al toque,
+// en la misma línea de código, sin depender de que el navegador la agende.
+function dataURLtoBlob(dataUrl){
+  const commaIdx = dataUrl.indexOf(",");
+  const header = dataUrl.slice(0, commaIdx);
+  const base64 = dataUrl.slice(commaIdx + 1);
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for(let i=0; i<len; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], {type: mime});
+}
+function canvasToBlobSync(canvas, mime, quality){
+  const dataUrl = (quality !== undefined) ? canvas.toDataURL(mime, quality) : canvas.toDataURL(mime);
+  return dataURLtoBlob(dataUrl);
+}
+
 function canvasToBlob(canvas){
   const hd = (state.config.exportQuality || "estandar") === "hd";
-  if(hd) return new Promise(resolve=> canvas.toBlob(resolve, "image/png", 1));
-  return new Promise(resolve=> canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if(hd) return Promise.resolve(canvasToBlobSync(canvas, "image/png", 1));
+  return Promise.resolve(canvasToBlobSync(canvas, "image/jpeg", 0.9));
 }
 function exportImageMeta(){
   const hd = (state.config.exportQuality || "estandar") === "hd";
@@ -6920,17 +6945,68 @@ async function nativeSaveOrShare(blob, filename, opts){
     const Filesystem = plugins.Filesystem;
     if(!Filesystem) return false;
     const base64 = await blobToBase64(blob);
-    const written = await Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" });
+    const folder = opts.folder || "Otros";
+    const relPath = `CatalogoWhatsApp/${folder}/${filename}`;
+
+    let written = null;
+    let savedLocationLabel = "";
+
+    // 1) Se intenta primero guardar dentro de la carpeta pública de
+    //    Descargas del celular, que es la más fácil de encontrar con
+    //    cualquier gestor de archivos.
+    try{
+      if(Filesystem.requestPermissions){
+        try{ await Filesystem.requestPermissions(); }catch(permErr){}
+      }
+      written = await Filesystem.writeFile({
+        path: `Download/${relPath}`,
+        data: base64,
+        directory: "EXTERNAL_STORAGE",
+        recursive: true
+      });
+      savedLocationLabel = `Descargas/CatalogoWhatsApp/${folder}`;
+    }catch(extErr){
+      written = null;
+    }
+
+    // 2) Si el celular no lo permitió (versiones de Android más
+    //    restrictivas), se usa la carpeta privada de documentos de la
+    //    app, que siempre funciona sin pedir permisos.
+    if(!written){
+      try{
+        written = await Filesystem.writeFile({
+          path: relPath,
+          data: base64,
+          directory: "DOCUMENTS",
+          recursive: true
+        });
+        savedLocationLabel = `Documentos de la app/CatalogoWhatsApp/${folder}`;
+      }catch(docErr){
+        written = null;
+      }
+    }
+
+    // 3) Último recurso: guardar solo temporalmente para poder compartirlo
+    //    ahora mismo (no queda una copia permanente).
+    if(!written){
+      written = await Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" });
+      savedLocationLabel = "";
+    }
+
     const Share = plugins.Share;
     if(Share && written && written.uri){
       try{
         await Share.share({ title: opts.title || filename, url: written.uri, dialogTitle: opts.title || "Compartir / Guardar" });
         return true;
       }catch(shareErr){
-        // El usuario cerró el selector de apps: el archivo ya quedó guardado igual.
+        // El usuario cerró el selector de apps: si quedó en un lugar permanente, igual está guardado.
       }
     }
-    toast((opts.savedMessage || "Archivo guardado") + ": " + filename);
+    if(savedLocationLabel){
+      toast((opts.savedMessage || "Guardado") + " en " + savedLocationLabel);
+    }else{
+      toast((opts.savedMessage || "Archivo guardado") + ": " + filename);
+    }
     return true;
   }catch(err){
     console.error("nativeSaveOrShare falló:", err);
@@ -6942,7 +7018,7 @@ qs("#btnDownloadCard").addEventListener("click", async ()=>{
   const canvas = qs("#cardCanvas");
   const blob = await canvasToBlob(canvas);
   const filename = safeFileName((currentCardDisplay||currentCardProduct).name) + "." + exportImageMeta().ext;
-  if(await nativeSaveOrShare(blob, filename, {title:(currentCardDisplay||currentCardProduct).name, savedMessage:"Imagen guardada"})) return;
+  if(await nativeSaveOrShare(blob, filename, {title:(currentCardDisplay||currentCardProduct).name, savedMessage:"Imagen guardada", folder:"Tarjetas"})) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -6958,7 +7034,7 @@ qs("#btnShareCard").addEventListener("click", async ()=>{
   const file = new File([blob], safeFileName(displayName)+"."+imeta.ext, {type:imeta.mime});
   registerShare([currentCardProduct.id]);
   renderProductList();
-  if(await nativeSaveOrShare(blob, file.name, {title: displayName})) return;
+  if(await nativeSaveOrShare(blob, file.name, {title: displayName, folder:"Tarjetas"})) return;
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{
       await navigator.share({files:[file], title: displayName});
@@ -6985,7 +7061,7 @@ qs("#btnShareCardDoc").addEventListener("click", async ()=>{
   const docFile = new File([docBlob], safeFileName(displayName)+"."+imeta.ext, {type:"application/octet-stream"});
   registerShare([currentCardProduct.id]);
   renderProductList();
-  if(await nativeSaveOrShare(docBlob, docFile.name, {title: displayName})) return;
+  if(await nativeSaveOrShare(docBlob, docFile.name, {title: displayName, folder:"Tarjetas"})) return;
   if(navigator.canShare && navigator.canShare({files:[docFile]})){
     try{
       await navigator.share({files:[docFile], title: displayName});
@@ -7099,28 +7175,37 @@ qs("#btnExportAll").addEventListener("click", async ()=>{
   if(state.products.length === 0){ toast("No hay productos para exportar"); return; }
   const btn = qs("#btnExportAll");
   const originalText = btn.textContent;
-  btn.innerHTML = '<span class="spinner"></span> Generando...';
   btn.disabled = true;
 
   try{
     const canvas = document.createElement("canvas");
     const files = [];
     const usedNames = new Set();
+    const total = state.products.length;
+    let i = 0;
     for(const p of state.products){
+      i++;
+      btn.innerHTML = `<span class="spinner"></span> Generando ${i}/${total}...`;
       await renderCardToCanvas(canvas, p);
       const blob = await canvasToBlob(canvas);
       const imeta = exportImageMeta();
       const buf = new Uint8Array(await blob.arrayBuffer());
       let base = safeFileName(p.name);
       let name = base + "." + imeta.ext;
-      let i = 2;
-      while(usedNames.has(name)){ name = base + "-" + i + "." + imeta.ext; i++; }
+      let n = 2;
+      while(usedNames.has(name)){ name = base + "-" + n + "." + imeta.ext; n++; }
       usedNames.add(name);
       files.push({name, data: buf});
+      // Cada tanto le damos un respiro al navegador para que no se sienta
+      // "trabado" (repinta el spinner, procesa toques, etc.) — importante
+      // sobre todo en catálogos grandes dentro de la app empaquetada.
+      if(i % 8 === 0) await new Promise(r=>setTimeout(r, 0));
     }
+    btn.innerHTML = '<span class="spinner"></span> Armando ZIP...';
+    await new Promise(r=>setTimeout(r, 0));
     const zipBlob = buildZip(files);
     const zipName = "catalogo-" + new Date().toISOString().slice(0,10) + ".zip";
-    if(await nativeSaveOrShare(zipBlob, zipName, {title:"Catálogo", savedMessage:"ZIP guardado"})){
+    if(await nativeSaveOrShare(zipBlob, zipName, {title:"Catálogo", savedMessage:"ZIP guardado", folder:"Tarjetas"})){
       toast(files.length + " tarjetas exportadas");
     }else{
       const a = document.createElement("a");
@@ -7432,13 +7517,18 @@ qs("#btnCatalogPdf").addEventListener("click", async ()=>{
 
     const canvas = document.createElement("canvas");
     const sections = [];
+    const totalToRender = productSections.reduce((s,sec)=>s+sec.products.length, 0);
+    let rendered = 0;
     for(const sec of productSections){
       const images = [];
       for(const p of sec.products){
+        rendered++;
+        btn.innerHTML = `<span class="spinner"></span> Generando ${rendered}/${totalToRender}...`;
         await renderCardToCanvas(canvas, p);
-        const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.82));
+        const blob = canvasToBlobSync(canvas, "image/jpeg", 0.82);
         const bytes = new Uint8Array(await blob.arrayBuffer());
         images.push({ bytes, width: canvas.width, height: canvas.height });
+        if(rendered % 8 === 0) await new Promise(r=>setTimeout(r, 0));
       }
       const bannerImg = sec.title ? await renderSectionBannerCanvas(sec.title, accent, sec.isNewSection) : null;
       sections.push({ bannerImg, images });
@@ -7467,7 +7557,7 @@ qs("#btnCatalogPdf").addEventListener("click", async ()=>{
 qs("#btnDownloadPdf").addEventListener("click", async ()=>{
   if(!lastCatalogPdfBlob) return;
   const filename = "catalogo-" + new Date().toISOString().slice(0,10) + ".pdf";
-  if(await nativeSaveOrShare(lastCatalogPdfBlob, filename, {title:"Catálogo", savedMessage:"PDF guardado"})) return;
+  if(await nativeSaveOrShare(lastCatalogPdfBlob, filename, {title:"Catálogo", savedMessage:"PDF guardado", folder:"Catalogo-PDF"})) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(lastCatalogPdfBlob);
   a.download = filename;
@@ -7477,7 +7567,7 @@ qs("#btnDownloadPdf").addEventListener("click", async ()=>{
 qs("#btnSharePdf").addEventListener("click", async ()=>{
   if(!lastCatalogPdfBlob) return;
   const file = new File([lastCatalogPdfBlob], "catalogo-" + new Date().toISOString().slice(0,10) + ".pdf", { type: "application/pdf" });
-  if(await nativeSaveOrShare(lastCatalogPdfBlob, file.name, {title:"Catálogo"})) return;
+  if(await nativeSaveOrShare(lastCatalogPdfBlob, file.name, {title:"Catálogo", folder:"Catalogo-PDF"})) return;
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{ await navigator.share({files:[file], title:"Catálogo"}); }catch(e){ /* cancelado */ }
   }else{
@@ -7965,7 +8055,7 @@ qs("#btnExportExcel").addEventListener("click", async ()=>{
   const csvContent = "\uFEFF" + rows.join("\r\n"); // BOM para que Excel detecte UTF-8
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const csvName = "productos-" + new Date().toISOString().slice(0,10) + ".csv";
-  if(await nativeSaveOrShare(blob, csvName, {title:"Productos CSV", savedMessage:"CSV guardado"})){
+  if(await nativeSaveOrShare(blob, csvName, {title:"Productos CSV", savedMessage:"CSV guardado", folder:"Excel-CSV"})){
     toast(`${state.products.length} productos exportados a CSV`);
   }else{
     const a = document.createElement("a");
@@ -8009,7 +8099,7 @@ qs("#btnBackup").addEventListener("click", async ()=>{
 
     const zip = buildZip(files);
     const zipName = "backup-catalogo-" + new Date().toISOString().slice(0,10) + ".zip";
-    if(await nativeSaveOrShare(zip, zipName, {title:"Copia de seguridad", savedMessage:"Copia guardada"})){
+    if(await nativeSaveOrShare(zip, zipName, {title:"Copia de seguridad", savedMessage:"Copia guardada", folder:"Copias-de-seguridad"})){
       toast(`Copia guardada: ${state.products.length} productos y ${photoCount} fotos`);
     }else{
       const a = document.createElement("a");
