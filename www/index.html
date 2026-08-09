@@ -113,6 +113,11 @@
   #photoActionSheet{z-index:70;}
   .modal{background:var(--panel);width:100%;max-width:520px;max-height:88vh;overflow-y:auto;
     border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));border:1px solid var(--border);border-bottom:none;}
+  .libre-handle{position:absolute;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center;font-size:18px;color:#fff;box-shadow:0 3px 10px rgba(0,0,0,0.45);
+    border:2px solid rgba(255,255,255,0.85);transform:translate(-50%,-50%);cursor:grab;
+    touch-action:none;user-select:none;z-index:5;transition:box-shadow .15s;}
+  .libre-handle.dragging{cursor:grabbing;box-shadow:0 0 0 4px rgba(255,255,255,0.35),0 3px 10px rgba(0,0,0,0.5);z-index:6;}
   .modal-handle{width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 12px;}
   .modal h3{font-size:16px;margin-bottom:14px;}
 
@@ -295,6 +300,8 @@
   <div id="tagFilterChips" class="tag-chip-row" style="display:none;"></div>
   <button class="btn btn-sm" id="btnClearNew" style="display:none;margin-bottom:10px;">✓ Marcar nuevos como vistos</button>
   <button class="btn btn-sm" id="btnToggleAllAvail" style="margin-bottom:10px;">☑️ Marcar todos</button>
+  <button class="btn btn-sm" id="btnMarkSelectedNew" style="margin-bottom:10px;">🆕 Poner "NUEVO" a los seleccionados</button>
+  <div class="hint tip" id="hintMarkSelectedNew" style="margin-top:-6px;margin-bottom:10px;">Marca a los productos que tengas ✅ tildados (checkbox de "disponible") con la insignia 🆕 NUEVO, sin tocar los demás.</div>
   <button class="btn btn-sm btn-ghost" id="btnToggleCompact" style="margin-bottom:10px;">📏 Vista compacta</button>
   <button class="btn btn-sm btn-ghost" id="btnFindDuplicates" style="margin-bottom:10px;">🔍 Buscar posibles duplicados</button>
   <button class="btn btn-block" id="btnBulkPhotos" style="margin-bottom:12px;">📷 Cargar varias fotos desde el móvil</button>
@@ -418,6 +425,19 @@
         </select>
       </div>
 
+      <label id="autoOfferLabel" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+        <input type="checkbox" id="mapAutoOffer" checked>
+        🏷️ Si un producto baja de precio, ponerle OFERTA automáticamente
+      </label>
+      <div class="hint tip" style="margin-top:0;margin-bottom:6px;">Cuando el precio que trae el Excel es menor al que ya tenías guardado, se guarda el precio viejo como "precio anterior" (tachado) y se activa la etiqueta OFERTA con el % de descuento, tal como si la hubieras puesto a mano. Si el precio sube o queda igual, no se toca nada de esto.</div>
+
+      <label id="skuOnlyLabel" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+        <input type="checkbox" id="mapSkuOnly" checked>
+        🔒 Emparejar solo por código/SKU (recomendado)
+      </label>
+      <div class="hint tip" style="margin-top:0;margin-bottom:6px;">Si una fila trae código, se busca ÚNICAMENTE por ese código; nunca se usa el nombre para decidir a qué producto pertenece. Si el código no coincide con ninguno guardado, el producto se crea como nuevo (o se manda a "revisar" si el nombre se parece mucho a otro) en vez de mezclarse con uno que tenga un nombre distinto. Desmarca esto solo si tu Excel no trae códigos confiables.</div>
+
+
       <div class="table-wrap">
         <table id="previewTable"></table>
       </div>
@@ -480,8 +500,25 @@
     <label style="margin-top:8px;">Info adicional (horario, nota, etc. — opcional)</label>
     <textarea id="cfgExtraInfo" rows="2" placeholder="Ej: Abierto de 8:00am a 6:00pm, todos los días"></textarea>
 
-    <label style="margin-top:8px;">Símbolo / prefijo de precio</label>
-    <input type="text" id="cfgCurrency" placeholder="$">
+    <label style="margin-top:8px;">Moneda del catálogo</label>
+    <select id="cfgCurrency">
+      <option value="USD">USD · Dólar</option>
+      <option value="CUP">CUP · Peso cubano</option>
+      <option value="EUR">EUR · Euro</option>
+      <option value="$">$ · Símbolo genérico</option>
+      <option value="otro">Otro / personalizado…</option>
+    </select>
+    <input type="text" id="cfgCurrencyCustom" placeholder="Ej: MLC" style="margin-top:6px;display:none;">
+
+    <label style="margin-top:8px;">Tasa de cambio (opcional — solo para tus cálculos internos, no aparece en las tarjetas del catálogo)</label>
+    <div class="row" style="align-items:center;">
+      <span class="hint" style="margin-top:0;white-space:nowrap;">1</span>
+      <input type="text" id="cfgSecondaryCurrency" placeholder="Ej: USD" style="max-width:90px;">
+      <span class="hint" style="margin-top:0;white-space:nowrap;">=</span>
+      <input type="number" id="cfgExchangeRate" inputmode="decimal" placeholder="Ej: 670" style="max-width:110px;">
+      <span class="hint" style="margin-top:0;white-space:nowrap;" id="cfgRateToLabel">CUP</span>
+    </div>
+    <span class="hint">Ej: si vendes en CUP pero quieres saber a cuánto equivale en USD, pon "USD" arriba y "670" (o la tasa del día). Al editar un producto verás su equivalente, y podrás fijar una tasa distinta solo para ese producto si compraste a otro cambio.</span>
 
     <label style="margin-top:8px;">Color principal de las tarjetas</label>
     <div class="row">
@@ -530,6 +567,7 @@
       <button class="btn btn-sm btn-ghost" id="btnClearLogo" style="display:none;">Quitar</button>
       <input type="file" id="logoInput" accept="image/*">
     </div>
+    <div class="hint tip">Este mismo logo se sube y se muestra también en tu sitio web (si tienes la sincronización activada abajo).</div>
 
     <label style="margin-top:8px;">Formato de tarjeta</label>
     <select id="cfgFormat">
@@ -675,9 +713,16 @@
             <option value="corner-tr">Etiqueta pequeña - arriba derecha</option>
             <option value="corner-bl">Etiqueta pequeña - abajo izquierda</option>
             <option value="corner-br">Etiqueta pequeña - abajo derecha</option>
+            <option value="cover">Toda la tarjeta oscurecida + sello al centro</option>
           </select>
         </div>
       </div>
+    </div>
+
+    <div class="tuning-box" id="clasicaOffsetsBox">
+      <div class="tuning-title">🎯 Posición de elementos — Clásica difuminada</div>
+      <div class="hint tip" style="margin:0 0 10px;">Arrastra cada elemento con el dedo hasta donde quieras. El cambio aplica a TODAS las tarjetas que usen el estilo Clásica (no solo la de la vista previa de arriba). Solo afecta ese estilo.</div>
+      <button class="btn btn-block btn-ghost" id="btnOpenClasicaEditor">✋ Mover elementos de la Clásica</button>
     </div>
 
     <div class="tuning-box" style="margin-top:14px;">
@@ -707,6 +752,18 @@
           </select>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;padding:12px;">
+      <label>🏷️ Lugar del cartel de OFERTA</label>
+      <select id="cfgOfertaPos">
+        <option value="auto" selected>Automático (recomendado)</option>
+        <option value="tl">Arriba - izquierda</option>
+        <option value="tr">Arriba - derecha</option>
+        <option value="bl">Abajo - izquierda</option>
+        <option value="br">Abajo - derecha</option>
+      </select>
+      <div class="hint tip" style="margin-top:6px;">En "Automático" el sistema le busca esquina sola y la corre si hay algo más ahí (QR, pocas unidades, urgencia). Si eliges una esquina fija, el sistema respeta esa siempre que pueda, y solo la mueve cuando otra cosa ya la está usando en esa misma tarjeta.</div>
     </div>
 
     <div class="card" style="margin-top:14px;padding:12px;">
@@ -833,7 +890,16 @@
     <select id="cfgCoverStyle">
       <option value="oscuro">Elegante oscura · logo circular con marco dorado</option>
       <option value="claro">Clásica clara · banda de color superior</option>
+      <option value="foto">📷 Foto · usa una foto real de tus productos de fondo</option>
+      <option value="minimalista">Minimalista · fondo claro, todo centrado, mucho aire</option>
     </select>
+    <div class="hint tip" style="margin-top:0;">El estilo "Foto" usa una foto real de un producto de fondo (difuminada). Elige cuál abajo. Si no tienes ninguna foto todavía, se ve igual que un degradado de color.</div>
+
+    <label style="margin-top:14px;">Producto que se usa de fondo en la portada (solo estilo "Foto")</label>
+    <select id="cfgCoverPhotoProduct">
+      <option value="">Automático (la primera foto cargada)</option>
+    </select>
+
     <button class="btn btn-block" id="btnPreviewCover" style="margin-top:8px;">👁️ Vista previa de la portada</button>
 
     <label style="margin-top:14px;">O usa tu propia portada (opcional)</label>
@@ -864,6 +930,142 @@
     <input type="file" id="restoreInput" accept=".zip" style="display:none;">
     <button class="btn btn-block btn-ghost" id="btnExportExcel" style="margin-top:10px;">📊 Exportar productos a Excel (CSV)</button>
     <button class="btn btn-danger btn-block" id="btnWipeAll" style="margin-top:12px;">Borrar TODOS los datos</button>
+  </div>
+
+  <div class="card col" id="cardSitioWeb">
+    <h3 style="margin-bottom:4px;">🌐 Sitio web del catálogo</h3>
+    <div class="hint tip" style="margin-top:0;">
+      Conecta tu catálogo con tu sitio web (el HTML que subiste a Netlify/Cloudflare) para que se actualice solo, con fotos incluidas, cada vez que guardas cambios aquí. Necesitas dos cuentas gratis, una sola vez:
+      <br>1. <b>Firebase</b> (console.firebase.google.com) → crea un proyecto, activa "Realtime Database" y "Authentication → Email/contraseña", crea un usuario con ese método. Copia la API key (Configuración del proyecto) y la URL de la base de datos.
+      <br>2. <b>imgbb.com</b> → API → copia tu API key.
+    </div>
+
+    <label style="margin-top:8px;">Número de WhatsApp para recibir pedidos</label>
+    <input type="text" id="webWhatsapp" placeholder="Ej: 5355555555 (sin + ni espacios)">
+
+    <label style="margin-top:8px;">URL de Firebase Realtime Database</label>
+    <input type="text" id="webFirebaseDbUrl" placeholder="Ej: https://tu-proyecto-default-rtdb.firebaseio.com">
+
+    <label style="margin-top:8px;">API Key (web) de Firebase</label>
+    <input type="text" id="webFirebaseApiKey" placeholder="Configuración del proyecto → General">
+
+    <label style="margin-top:8px;">Email de la cuenta de Firebase (Authentication)</label>
+    <input type="text" id="webFirebaseEmail" placeholder="Ej: tienda@tucorreo.com">
+
+    <label style="margin-top:8px;">Contraseña de esa cuenta</label>
+    <input type="password" id="webFirebasePassword" placeholder="La que pusiste al crear el usuario">
+
+    <label style="margin-top:8px;">API Key de ImgBB (para subir fotos)</label>
+    <input type="text" id="webImgbbKey" placeholder="Tu API key de imgbb.com">
+
+    <label style="margin-top:8px;">Calidad de las fotos al subirlas al sitio web</label>
+    <select id="webPhotoQuality">
+      <option value="original">Igual que la calidad guardada (más pesada, más lenta de subir)</option>
+      <option value="media">Media — hasta 1000px (más rápida, se ve bien igual)</option>
+      <option value="baja">Baja — hasta 700px (la más rápida, ideal con conexión lenta)</option>
+    </select>
+    <span class="hint tip">Esto solo afecta lo que se sube al sitio web. La foto guardada dentro de la app (para tarjetas y PDF) no se toca.</span>
+
+    <hr class="sep" style="margin:14px 0;">
+
+    <label>Color principal del sitio</label>
+    <div class="row">
+      <input type="color" id="webColorPrimario" value="#0F4C3A">
+      <span class="hint tip" style="margin-top:0;">Encabezado, precios y botón de agregar</span>
+    </div>
+
+    <label style="margin-top:10px;">Color de acento del sitio</label>
+    <div class="row">
+      <input type="color" id="webColorAcento" value="#F0662B">
+      <span class="hint tip" style="margin-top:0;">Etiqueta OFERTA y burbuja del carrito</span>
+    </div>
+
+    <hr class="sep" style="margin:14px 0;">
+
+    <label>Horario de atención (opcional)</label>
+    <div class="row" style="gap:10px;">
+      <div style="flex:1;">
+        <span class="hint tip" style="margin-top:0;">Abre</span>
+        <input type="time" id="webHoraApertura">
+      </div>
+      <div style="flex:1;">
+        <span class="hint tip" style="margin-top:0;">Cierra</span>
+        <input type="time" id="webHoraCierre">
+      </div>
+    </div>
+    <span class="hint tip">Si lo dejas vacío, el sitio no muestra el horario. Se calcula con la hora del teléfono de quien visita, todos los días igual.</span>
+
+    <label style="margin-top:10px;">Descripción de la tienda (opcional)</label>
+    <textarea id="webDescription" rows="3" placeholder="Cuéntale al cliente qué vendes, en qué se especializa tu tienda, etc."></textarea>
+    <span class="hint tip">Se muestra en el panel de info al tocar el nombre/logo de tu tienda en el sitio.</span>
+
+    <label style="margin-top:10px;">Ubicación (opcional)</label>
+    <input type="text" id="webAddress" placeholder="Ej: Santiago de Cuba, Santiago de Cuba">
+
+    <label style="margin-top:10px;">Entrega (opcional)</label>
+    <input type="text" id="webDeliveryText" placeholder='Ej: Entregamos a domicilio'>
+    <span class="hint tip">Déjalo vacío si no ofreces entrega a domicilio.</span>
+
+    <label style="margin-top:10px;">Redes sociales (opcional)</label>
+    <div class="row" style="gap:8px;">
+      <input type="text" id="webFacebookUrl" placeholder="Link de Facebook">
+    </div>
+    <div class="row" style="gap:8px;margin-top:6px;">
+      <input type="text" id="webInstagramUrl" placeholder="Link de Instagram">
+    </div>
+
+    <label style="margin-top:10px;">Descuento por pago en efectivo (opcional)</label>
+    <div class="row">
+      <input type="number" id="webDescuentoEfectivo" min="0" max="100" step="1" placeholder="Ej: 50" style="max-width:110px;">
+      <span class="hint tip" style="margin-top:0;">%. Déjalo en 0 o vacío si no aplicas descuento por efectivo.</span>
+    </div>
+
+    <label style="margin-top:10px;">Opción de pago en otra moneda (opcional)</label>
+    <div class="row" style="align-items:center;">
+      <span class="hint tip" style="margin-top:0;white-space:nowrap;">1</span>
+      <input type="text" id="webSecondaryCurrency" placeholder="Ej: USD" style="max-width:90px;">
+      <span class="hint tip" style="margin-top:0;white-space:nowrap;">=</span>
+      <input type="number" id="webExchangeRate" inputmode="decimal" placeholder="Ej: 670" style="max-width:110px;">
+      <span class="hint tip" style="margin-top:0;white-space:nowrap;" id="webRateToLabel">CUP</span>
+    </div>
+    <span class="hint tip">Si lo llenas, en el sitio aparece "Pago en [moneda]" junto a Efectivo/Transferencia, mostrando el total convertido con esta tasa. Déjalo vacío para no mostrar esa opción.</span>
+
+    <label style="margin-top:10px;display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="webBannerEnabled" style="width:auto;">
+      Mostrar cinta de aviso arriba del catálogo
+    </label>
+    <input type="text" id="webBannerText" placeholder='Ej: 30% de descuento pagando en efectivo' style="margin-top:6px;">
+    <span class="hint tip">Se muestra como una cinta deslizante arriba de la tienda. Las monedas que acepte tu tienda (según lo que configuraste arriba) se agregan solas al final — no hace falta escribirlas.</span>
+
+    <label style="margin-top:10px;">Primera línea del mensaje de WhatsApp (opcional)</label>
+    <textarea id="webMensajePedido" rows="2" placeholder="Por defecto: Hola [nombre de tu tienda]! Quiero hacer este pedido:"></textarea>
+
+    <label style="margin-top:10px;">Forma de pago / notas para el pedido (opcional)</label>
+    <textarea id="webInfoPago" rows="2" placeholder="Ej: Pago por transferencia o efectivo al recibir. Envíos dentro de La Habana."></textarea>
+    <div class="hint tip" style="margin-top:4px;">Se muestra en el carrito antes de enviar y se agrega al final del mensaje de WhatsApp.</div>
+
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+      <input type="checkbox" id="webSyncEnabled" style="width:18px;height:18px;">
+      🔄 Sincronizar el sitio web automáticamente al guardar cambios
+    </label>
+    <div class="hint tip" style="margin-top:4px;">
+      Incluye TODOS los productos, también los agotados (se marcan con la etiqueta "AGOTADO" en el sitio en vez de desaparecer). Las fotos solo se vuelven a subir si son nuevas o cambiaron — no se re-suben en cada guardado.
+    </div>
+
+    <div class="row" style="gap:8px;margin-top:10px;">
+      <button class="btn btn-block" id="btnGuardarWebCfg">💾 Guardar datos</button>
+      <button class="btn btn-primary btn-block" id="btnSincronizarAhora">🔄 Sincronizar ahora</button>
+    </div>
+    <div class="hint" id="webSyncStatus" style="margin-top:8px;"></div>
+
+    <hr class="sep" style="margin:14px 0;">
+    <button class="btn btn-block" id="btnExportarWebLocal">📂 Exportar para ver el sitio SIN internet</button>
+    <div class="hint tip" style="margin-top:4px;">
+      Genera un archivo <code>catalogo-local.json</code> con todo (productos y fotos incluidas) sin subir nada a internet.
+      Ábrelo con "Cargar catálogo desde archivo" dentro del index.html de tu sitio web para verlo tal cual quedaría, sin conexión.
+      Con catálogos grandes puede tardar un poco en generarse.
+    </div>
+    <div class="hint" id="webExportLocalStatus" style="margin-top:8px;"></div>
   </div>
 </div>
 
@@ -918,6 +1120,7 @@
       <button class="btn btn-sm btn-ghost" id="btnRemovePhoto" style="display:none;">Quitar</button>
       <input type="file" id="photoInput" accept="image/*">
     </div>
+    <button type="button" class="btn btn-sm btn-ghost" id="btnOpenPhotoCrop" style="display:none;margin:-6px 0 12px;">🔍 Recortar / acercar foto</button>
     <div class="col" style="margin-bottom:12px;">
       <label>Fotos adicionales (opcional) · para armar una tarjeta tipo mosaico con varias fotos del mismo producto (como camas Queen/King juntas)</label>
       <div class="row" id="galleryThumbs" style="gap:8px;flex-wrap:wrap;margin-top:6px;"></div>
@@ -975,6 +1178,12 @@
       <div class="col" style="margin-top:8px;">
         <label>Precio anterior (opcional — si lo llenas, se muestra como OFERTA)</label>
         <input type="number" id="pOldPrice" inputmode="decimal" placeholder="Ej: 250 (déjalo vacío si no hay oferta)">
+        <div class="hint" id="pOldPriceHint" style="margin-top:4px;"></div>
+      </div>
+      <div class="col" style="margin-top:8px;">
+        <label>Tasa de cambio especial para este producto (opcional)</label>
+        <input type="number" id="pExchangeRate" inputmode="decimal" placeholder="Vacío = usa la tasa general de Configuración">
+        <span class="hint" id="pRateConversionHint"></span>
       </div>
       <div class="col" style="margin-top:8px;">
         <label>Texto de la etiqueta de oferta (opcional — si lo dejas vacío usa "OFERTA -X%")</label>
@@ -1094,6 +1303,55 @@
   </div>
 </div>
 
+<!-- ===================== MODAL: RECORTAR / ACERCAR FOTO ===================== -->
+<div class="modal-overlay" id="modalPhotoCrop">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-handle"></div>
+    <h3>🔍 Recortar / acercar foto</h3>
+    <div class="hint tip" style="margin:0 0 10px;">Arrastra la foto para moverla dentro del marco, y usa el control para acercar o alejar. Se aplica solo a este producto, en cualquier estilo de tarjeta que uses.</div>
+    <div id="photoCropStage" style="position:relative;width:100%;max-width:320px;aspect-ratio:1/1;margin:0 auto;border-radius:14px;overflow:hidden;border:1px solid var(--border);touch-action:none;background:#111;cursor:grab;">
+      <canvas id="photoCropCanvas" style="width:100%;height:100%;display:block;"></canvas>
+    </div>
+    <div class="col" style="margin-top:14px;gap:4px;">
+      <label style="display:flex;justify-content:space-between;">
+        <span>Zoom</span>
+        <span id="photoCropZoomLabel">1.0x</span>
+      </label>
+      <input type="range" id="photoCropZoom" min="1" max="3.5" step="0.01" value="1" style="width:100%;">
+    </div>
+    <div class="row" style="gap:8px;margin-top:14px;">
+      <button class="btn btn-block btn-ghost" id="btnResetPhotoCrop">↺ Restablecer</button>
+      <button class="btn btn-primary btn-block" id="btnSavePhotoCrop">💾 Guardar</button>
+    </div>
+    <button class="btn btn-block btn-ghost" id="btnClosePhotoCrop" style="margin-top:8px;">Cerrar</button>
+  </div>
+</div>
+
+<!-- ===================== MODAL: EDITOR DE POSICIONES - CLÁSICA ===================== -->
+<div class="modal-overlay" id="modalClasicaEditor">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-handle"></div>
+    <h3>🎯 Posición de elementos — Clásica</h3>
+    <div class="hint tip" style="margin:0 0 10px;">Arrastra cada elemento con el dedo a donde quieras. Se actualiza en el momento. Cuando quede como te gusta, toca "Guardar posiciones". Aplica a TODAS las tarjetas con el estilo Clásica.</div>
+    <div id="clasicaEditorStage" style="position:relative;width:100%;max-width:340px;margin:0 auto;border-radius:14px;overflow:hidden;border:1px solid var(--border);touch-action:none;background:#111;">
+      <canvas id="clasicaEditorCanvas" style="width:100%;display:block;"></canvas>
+      <div class="libre-handle" data-el="photo" style="background:rgba(59,130,246,0.9);" title="Foto">📷</div>
+      <div class="libre-handle" data-el="logo" style="background:rgba(168,85,247,0.9);" title="Logo">🔘</div>
+      <div class="libre-handle" data-el="storeName" style="background:rgba(234,179,8,0.9);" title="Nombre de la tienda">🏪</div>
+      <div class="libre-handle" data-el="category" style="background:rgba(20,184,166,0.9);" title="Categoría">🔖</div>
+      <div class="libre-handle" data-el="name" style="background:rgba(220,38,38,0.9);" title="Nombre del producto">🏷️</div>
+      <div class="libre-handle" data-el="price" style="background:rgba(22,163,74,0.9);" title="Precio">💲</div>
+      <div class="libre-handle" data-el="contact" style="background:rgba(100,116,139,0.9);" title="Contacto">📞</div>
+    </div>
+    <div class="hint tip" style="margin-top:10px;">📷 Foto · 🔘 Logo · 🏪 Nombre de tienda · 🔖 Categoría · 🏷️ Nombre del producto · 💲 Precio · 📞 Contacto. Un circulito puede quedar tapado si dos elementos quedan muy cerca — solo arrástralo desde ahí, igual funciona.</div>
+    <div class="row" style="gap:8px;margin-top:12px;">
+      <button class="btn btn-block btn-ghost" id="btnResetClasicaOffsets">↺ Restablecer</button>
+      <button class="btn btn-primary btn-block" id="btnSaveClasicaOffsets">💾 Guardar posiciones</button>
+    </div>
+    <button class="btn btn-block btn-ghost" id="btnCloseClasicaEditor" style="margin-top:8px;">Cerrar</button>
+  </div>
+</div>
+
 <!-- ===================== MODAL: ASIGNAR FOTOS EN LOTE ===================== -->
 <div class="modal-overlay" id="modalBulkPhotos">
   <div class="modal">
@@ -1135,6 +1393,23 @@
         <label>Etiqueta (opcional)</label>
         <input type="text" id="comboLabel" placeholder="COMBO">
       </div>
+    </div>
+
+    <div class="col" style="margin-top:6px;">
+      <label>Estilo de la tarjeta del combo</label>
+      <select id="comboCardStyle">
+        <option value="clasica">Clásica · foto de fondo difuminada</option>
+        <option value="minimal">Minimalista</option>
+        <option value="franja">Franja</option>
+        <option value="oscura">Oscura</option>
+        <option value="vibrante">Vibrante</option>
+        <option value="polaroid">Polaroid</option>
+        <option value="cinta">Cinta</option>
+        <option value="revista">Revista</option>
+        <option value="boutique">Boutique</option>
+        <option value="apilado">🆕 Apilado (fotos en abanico)</option>
+        <option value="grid">🆕 Grid (fotos en cuadrícula)</option>
+      </select>
     </div>
 
     <div style="display:flex;justify-content:center;margin:14px 0;">
@@ -1271,7 +1546,32 @@ let state = {
     tagline: "",
     warrantyText: "",
     coverStyle: "oscuro",
-    promoFrameStyle: "borde" // marco de promoción en tarjetas: "borde" | "cinta" | "franja" | "ninguno"
+    coverPhotoProductId: "", // id del producto cuya foto se usa de fondo en la portada estilo "Foto" (vacío = automático)
+    promoFrameStyle: "borde", // marco de promoción en tarjetas: "borde" | "cinta" | "franja" | "ninguno"
+    webWhatsapp: "",       // número de WhatsApp que se usa en el sitio web para recibir pedidos
+    webFirebaseDbUrl: "",  // URL de Realtime Database, ej: https://xxx-default-rtdb.firebaseio.com
+    webFirebaseApiKey: "", // API key web del proyecto Firebase
+    webFirebaseEmail: "",  // cuenta creada en Authentication (email/contraseña) para publicar
+    webFirebasePassword: "", // contraseña de esa cuenta
+    webImgbbKey: "",       // API key de imgbb.com para subir fotos
+    webPhotoQuality: "original", // "original" | "media" (≤1000px) | "baja" (≤700px) — solo afecta lo que se sube al sitio, no el archivo local
+    webSyncEnabled: false, // si está activo, cada guardado dispara una sincronización con el sitio web
+    webColorPrimario: "#0F4C3A",  // color principal del sitio (encabezado, precios, botón +)
+    webColorAcento: "#F0662B",    // color de acento del sitio (etiqueta OFERTA, burbuja del carrito)
+    webHoraApertura: "",          // "HH:MM" — vacío = no se muestra horario en el sitio
+    webHoraCierre: "",            // "HH:MM"
+    webDescription: "",           // texto sobre la tienda, se muestra en el panel de info del sitio
+    webAddress: "",                // ubicación, ej: "Santiago de Cuba, Santiago de Cuba"
+    webDeliveryText: "",           // ej: "Entregamos a domicilio" — vacío = no se muestra
+    webFacebookUrl: "",            // link a Facebook, vacío = no se muestra
+    webInstagramUrl: "",           // link a Instagram, vacío = no se muestra
+    webDescuentoEfectivo: 0,      // % de descuento si el cliente elige pagar en efectivo
+    webSecondaryCurrency: "",     // nombre de la otra moneda para pagar en el sitio, ej: "USD"
+    webExchangeRate: 0,           // cuántas unidades de tu moneda (currency) equivalen a 1 de webSecondaryCurrency
+    webBannerEnabled: false,      // true = mostrar la cinta de aviso arriba del catálogo en el sitio
+    webBannerText: "",            // texto de la cinta, ej: "30% de descuento pagando en efectivo"
+    webMensajePedido: "",  // primera línea del mensaje de WhatsApp (vacío = usa el mensaje por defecto)
+    webInfoPago: ""        // formas de pago / notas que se agregan al final del pedido de WhatsApp
   },
   products: [], // {id, name, price, category, hasPhoto, tags:[...], promoLabel, urgencyLabel}
   combos: [], // {id, name, productIds:[...], price, promoLabel, addedAt} — combos de 2-3 productos con precio especial
@@ -1313,14 +1613,30 @@ function loadState(){
     }
   }catch(e){ console.error("Error cargando estado", e); }
 }
+// El guardado se "debounce" (espera un poquito antes de escribir) para no
+// serializar TODO el catálogo a texto en cada clic (por ejemplo al tocar
+// "Marcar todos" con cientos de productos, antes se hacía un JSON.stringify
+// completo por cada uno). Para no perder cambios si cierras la app o cambias
+// a WhatsApp justo después de editar, se fuerza el guardado inmediato al
+// esconderse/cerrarse la pestaña (flushSaveState).
+let saveStateTimer = null;
 function saveState(){
+  if(saveStateTimer) clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(flushSaveState, 400);
+}
+function flushSaveState(){
+  if(saveStateTimer){ clearTimeout(saveStateTimer); saveStateTimer = null; }
   try{
     localStorage.setItem(LS_KEY, JSON.stringify(state));
   }catch(e){
     console.error("Error guardando estado", e);
     toast("No se pudo guardar (espacio lleno). Borra fotos o productos.");
   }
+  if(typeof programarSincronizacionWeb === "function") programarSincronizacionWeb();
 }
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "hidden") flushSaveState(); });
+window.addEventListener("pagehide", flushSaveState);
+window.addEventListener("beforeunload", flushSaveState);
 
 /* ---- IndexedDB para fotos (evita llenar localStorage) ---- */
 let dbPromise = null;
@@ -1634,6 +1950,19 @@ async function getPhotoUrl(id){
   photoUrlCache.set(id, url);
   return url;
 }
+// Saca una foto de la caché Y libera su URL de memoria (URL.revokeObjectURL).
+// Sin esto, cada vez que se reemplaza la foto de un producto, la URL vieja se
+// quedaba viva en memoria para siempre (un memory leak lento pero real en un
+// WebView de Android, que suele tener poca RAM disponible).
+function invalidatePhotoUrl(id){
+  const old = photoUrlCache.get(id);
+  if(old) URL.revokeObjectURL(old);
+  photoUrlCache.delete(id);
+}
+function clearAllPhotoUrls(){
+  photoUrlCache.forEach(url=>URL.revokeObjectURL(url));
+  photoUrlCache.clear();
+}
 
 function updateCategoryOptions(){
   const cats = Array.from(new Set(state.products.map(p=>p.category).filter(Boolean))).sort();
@@ -1746,8 +2075,12 @@ async function renderProductList(){
   }
 
   list.innerHTML = "";
+  const frag = document.createDocumentFragment();
   for(const p of items){
     const outOfStock = isOutOfStock(p);
+    const pRate = p.customExchangeRate || state.config.exchangeRate || 0;
+    const rateBadge = (pRate && state.config.secondaryCurrency && p.price) ?
+      `<span class="badge" style="margin-right:6px;" title="${p.customExchangeRate ? 'Tasa especial de este producto: 1 '+esc(state.config.secondaryCurrency)+' = '+pRate+' '+esc(state.config.currency) : 'Con la tasa general de Configuración'}">💱 ≈ ${esc(state.config.secondaryCurrency)} ${formatNumber(p.price/pRate)}</span>` : "";
     const div = document.createElement("div");
     div.className = "prod-item" + (p.available === false ? " unavailable" : "") + (outOfStock ? " agotado" : "");
     div.innerHTML = `
@@ -1755,22 +2088,26 @@ async function renderProductList(){
       <div class="prod-thumb" data-thumb="${p.id}"><span>${p.hasPhoto?"⏳":"🖼️"}</span></div>
       <div class="prod-info">
         <div class="prod-name">${esc(p.name)}</div>
-        <div class="prod-meta">${p.isNew?`<span class="badge-new" data-action="togglenew" data-id="${p.id}" title="Toca para quitarlo de Productos Nuevos">🆕 NUEVO ✕</span>`:""}${outOfStock?`<span class="badge-agotado">AGOTADO</span>`:""}${(!outOfStock && isOnSale(p))?`<span class="badge" style="margin-right:6px;background:#dc2626;color:#fff;">🏷️ ${p.promoLabel?esc(p.promoLabel):"OFERTA"}</span>`:""}${(!outOfStock && p.urgencyLabel && p.urgencyLabel.trim())?`<span class="badge" style="margin-right:6px;background:#7e22ce;color:#fff;">⏳ ${esc(p.urgencyLabel)}</span>`:""}${isPriceStale(p)?`<span class="badge" style="margin-right:6px;background:#7c5a00;color:#ffd166;" title="No se toca el precio hace más de ${state.config.priceStaleDays} días">⏰ Precio viejo</span>`:""}${p.shareCount?`<span class="badge" style="margin-right:6px;" title="Última vez: ${p.lastSharedAt ? new Date(p.lastSharedAt).toLocaleDateString('es') : '—'}">📤 ${p.shareCount}</span>`:""}${(p.useMosaic && p.galleryCount)?`<span class="badge" style="margin-right:6px;" title="Esta tarjeta se genera en mosaico">🧩 Mosaico</span>`:""}${(!p.useMosaic && p.cardStyleOverride)?`<span class="badge" style="margin-right:6px;" title="Esta tarjeta usa un estilo distinto al general del catálogo">🎨 Estilo propio</span>`:""}${p.sku?`<span class="badge" style="margin-right:6px;">SKU: ${esc(p.sku)}</span>`:""}${p.category?esc(p.category)+" · ":""}${isOnSale(p)?`<span style="text-decoration:line-through;opacity:.55;margin-right:4px;">${esc(state.config.currency)} ${formatNumber(p.oldPrice)}</span>`:""}<span class="prod-price">${esc(state.config.currency)} ${formatNumber(p.price)}</span>${p.unit&&UNIT_LABELS[p.unit]?` <span class="prod-qty">/${UNIT_LABELS[p.unit]}</span>`:""}${(p.qty!==undefined&&p.qty!==null&&!isNaN(p.qty))?` · <span class="prod-qty">stock: ${esc(p.qty)}</span>`:""}${(p.tags&&p.tags.length)?`<br>${p.tags.map(t=>`<span class="badge" style="margin-right:4px;margin-top:4px;">#${esc(t)}</span>`).join("")}`:""}</div>
+        <div class="prod-meta">${p.isNew?`<span class="badge-new" data-action="togglenew" data-id="${p.id}" title="Toca para quitarlo de Productos Nuevos">🆕 NUEVO ✕</span>`:""}${outOfStock?`<span class="badge-agotado">AGOTADO</span>`:""}${(!outOfStock && isOnSale(p))?`<span class="badge" style="margin-right:6px;background:#dc2626;color:#fff;">🏷️ ${p.promoLabel?esc(p.promoLabel):"OFERTA"}</span>`:""}${(!outOfStock && p.urgencyLabel && p.urgencyLabel.trim())?`<span class="badge" style="margin-right:6px;background:#7e22ce;color:#fff;">⏳ ${esc(p.urgencyLabel)}</span>`:""}${isPriceStale(p)?`<span class="badge" style="margin-right:6px;background:#7c5a00;color:#ffd166;" title="No se toca el precio hace más de ${state.config.priceStaleDays} días">⏰ Precio viejo</span>`:""}${p.shareCount?`<span class="badge" style="margin-right:6px;" title="Última vez: ${p.lastSharedAt ? new Date(p.lastSharedAt).toLocaleDateString('es') : '—'}">📤 ${p.shareCount}</span>`:""}${(p.useMosaic && p.galleryCount)?`<span class="badge" style="margin-right:6px;" title="Esta tarjeta se genera en mosaico">🧩 Mosaico</span>`:""}${(!p.useMosaic && p.cardStyleOverride)?`<span class="badge" style="margin-right:6px;" title="Esta tarjeta usa un estilo distinto al general del catálogo">🎨 Estilo propio</span>`:""}${p.sku?`<span class="badge" style="margin-right:6px;">SKU: ${esc(p.sku)}</span>`:""}${p.category?esc(p.category)+" · ":""}${isOnSale(p)?`<span style="text-decoration:line-through;opacity:.55;margin-right:4px;">${esc(state.config.currency)} ${formatNumber(p.oldPrice)}</span>`:""}<span class="prod-price">${esc(state.config.currency)} ${formatNumber(p.price)}</span>${rateBadge}${p.unit&&UNIT_LABELS[p.unit]?` <span class="prod-qty">/${UNIT_LABELS[p.unit]}</span>`:""}${(p.qty!==undefined&&p.qty!==null&&!isNaN(p.qty))?` · <span class="prod-qty">stock: ${esc(p.qty)}</span>`:""}${(p.tags&&p.tags.length)?`<br>${p.tags.map(t=>`<span class="badge" style="margin-right:4px;margin-top:4px;">#${esc(t)}</span>`).join("")}`:""}</div>
       </div>
       <div class="prod-actions">
         ${!p.hasPhoto?`<div class="icon-btn" data-action="quickphoto" data-id="${p.id}" title="Añadir foto rápido">📷</div>`:""}
         <div class="icon-btn" data-action="card" data-id="${p.id}" title="Generar tarjeta">🖼️</div>
         <div class="icon-btn" data-action="edit" data-id="${p.id}" title="Editar">✏️</div>
       </div>`;
-    list.appendChild(div);
+    frag.appendChild(div);
     if(p.hasPhoto){
+      // Guardamos la referencia directa al thumb de ESTE producto en vez de
+      // buscarlo de nuevo en toda la lista (list.querySelector recorría los
+      // N elementos de la lista por cada foto = lento en catálogos grandes).
+      const thumbEl = div.querySelector(".prod-thumb");
       getPhotoUrl(p.id).then(url=>{
-        if(!url) return;
-        const thumbEl = list.querySelector(`[data-thumb="${p.id}"]`);
-        if(thumbEl) thumbEl.innerHTML = `<img src="${url}">`;
+        if(!url || !thumbEl.isConnected) return;
+        thumbEl.innerHTML = `<img src="${url}" loading="lazy">`;
       });
     }
   }
+  list.appendChild(frag);
   renderComboList();
 }
 
@@ -1872,6 +2209,7 @@ function onComboSelectionChanged(){
 
 qs("#comboName").addEventListener("input", ()=>{ qs("#comboName").dataset.userEdited = "1"; });
 ["comboPrice","comboLabel"].forEach(id=> qs("#"+id).addEventListener("input", rerenderComboPreview));
+qs("#comboCardStyle").addEventListener("change", rerenderComboPreview);
 
 async function rerenderComboPreview(){
   const canvas = qs("#comboCanvas");
@@ -1915,7 +2253,8 @@ async function rerenderComboPreview(){
     name: qs("#comboName").value.trim() || products.map(p=>p.name).join(" + "),
     price,
     promoLabel: qs("#comboLabel").value.trim(),
-    productIds: comboSelectedIds.slice()
+    productIds: comboSelectedIds.slice(),
+    cardStyle: qs("#comboCardStyle").value || "clasica"
   };
   await drawComboCard(ctx, W, H, combo, productsWithImg, cfg);
 }
@@ -1929,6 +2268,7 @@ function openComboModal(combo){
   qs("#comboName").dataset.userEdited = combo ? "1" : "";
   qs("#comboPrice").value = combo ? combo.price : "";
   qs("#comboLabel").value = combo ? (combo.promoLabel||"") : "";
+  qs("#comboCardStyle").value = combo ? (combo.cardStyle||"clasica") : "clasica";
   qs("#btnDeleteCombo").style.display = combo ? "block" : "none";
   renderComboProductPicker();
   onComboSelectionChanged();
@@ -1949,11 +2289,12 @@ qs("#btnSaveCombo").addEventListener("click", ()=>{
     const p = state.products.find(x=>x.id===id); return p?p.name:"";
   }).filter(Boolean).join(" + ");
   const promoLabel = qs("#comboLabel").value.trim();
+  const cardStyle = qs("#comboCardStyle").value || "clasica";
   if(editingCombo){
     editingCombo.name = name; editingCombo.price = price; editingCombo.promoLabel = promoLabel;
-    editingCombo.productIds = comboSelectedIds.slice();
+    editingCombo.productIds = comboSelectedIds.slice(); editingCombo.cardStyle = cardStyle;
   }else{
-    editingCombo = { id: uid(), name, price, promoLabel, productIds: comboSelectedIds.slice(), addedAt: Date.now() };
+    editingCombo = { id: uid(), name, price, promoLabel, productIds: comboSelectedIds.slice(), cardStyle, addedAt: Date.now() };
     state.combos.push(editingCombo);
   }
   saveState();
@@ -2014,7 +2355,12 @@ function updateProductStatsBar(){
   const agotados = state.products.filter(isOutOfStock).length;
   const nuncaCompartidos = state.products.filter(p => !p.shareCount).length;
   const totalValor = state.products.reduce((sum,p) => sum + (Number(p.price)||0), 0);
-  bar.textContent = `📦 ${total} productos · 🖼️ ${sinFoto} sin foto · ⛔ ${agotados} agotados · 📤 ${nuncaCompartidos} nunca compartidos · 💰 ${state.config.currency} ${formatNumber(totalValor)} en catálogo`;
+  let secText = "";
+  if(state.config.exchangeRate && state.config.secondaryCurrency){
+    const totalValorSec = state.products.reduce((sum,p) => sum + ((Number(p.price)||0) / (p.customExchangeRate || state.config.exchangeRate)), 0);
+    secText = ` (≈ ${state.config.secondaryCurrency} ${formatNumber(totalValorSec)})`;
+  }
+  bar.textContent = `📦 ${total} productos · 🖼️ ${sinFoto} sin foto · ⛔ ${agotados} agotados · 📤 ${nuncaCompartidos} nunca compartidos · 💰 ${state.config.currency} ${formatNumber(totalValor)}${secText} en catálogo`;
 }
 
 /* ============================================================
@@ -2145,6 +2491,23 @@ qs("#btnClearNew").addEventListener("click", ()=>{
   saveState();
   renderProductList();
   toast("Productos marcados como vistos");
+});
+
+// Marca en lote como 🆕 NUEVO a los productos que estén "seleccionados" ahora mismo
+// (el checkbox de "disponible para el catálogo", el mismo que cuenta en el
+// "✅ X seleccionados" de arriba y en "Compartir seleccionados por WhatsApp").
+// Así José puede tildar un grupo de productos y ponerles la etiqueta NUEVO de un
+// toque, sin tener que editar producto por producto.
+qs("#btnMarkSelectedNew").addEventListener("click", ()=>{
+  const targets = state.products.filter(p => p.available !== false);
+  if(targets.length === 0){
+    toast("No hay productos seleccionados ahora mismo");
+    return;
+  }
+  targets.forEach(p=>{ p.isNew = true; p.addedAt = Date.now(); });
+  saveState();
+  renderProductList();
+  toast(`🆕 NUEVO puesto en ${targets.length} producto${targets.length===1?"":"s"}`);
 });
 
 qs("#prodList").addEventListener("change", (e)=>{
@@ -2699,7 +3062,7 @@ async function handleQuickPhotoFile(file){
     const compressed = await compressImageFile(file);
     await setPhoto(product.id, compressed);
     product.hasPhoto = true;
-    photoUrlCache.delete(product.id);
+    invalidatePhotoUrl(product.id);
     saveState();
     renderProductList();
     toast("Foto añadida a " + product.name);
@@ -2721,7 +3084,14 @@ qs("#quickPhotoInputCamera").addEventListener("change", async (e)=>{
 
 qs("#ctaBulkPhotos").addEventListener("click", ()=> qs("#btnBulkPhotos").click());
 
-qs("#searchInput").addEventListener("input", renderProductList);
+// Debounce: evita re-renderizar toda la lista (y volver a pedir cada foto)
+// en cada tecla que se escribe — solo renderiza cuando la persona hace una
+// pausa breve al escribir, que es cuando realmente importa el resultado.
+let searchDebounceTimer = null;
+qs("#searchInput").addEventListener("input", ()=>{
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(renderProductList, 180);
+});
 qs("#filterCategoria").addEventListener("change", renderProductList);
 qs("#filterEstado").addEventListener("change", renderProductList);
 
@@ -2858,6 +3228,7 @@ qs("#savedListsList").addEventListener("click", (e)=>{
    ============================================================ */
 let editingProduct = null;
 let pendingPhotoBlob = null;
+let pendingPhotoFocus = null; // recorte/zoom pendiente de guardar para la foto principal del producto
 let pendingPhotoRemoved = false;
 const GALLERY_MAX = 3; // + la foto principal = hasta 4 fotos por producto para el mosaico
 let pendingGallery = []; // hasta GALLERY_MAX entradas: {type:'existing', index} o {type:'new', blob}
@@ -2875,6 +3246,48 @@ function updateMarginHint(){
 }
 qs("#pPrice").addEventListener("input", updateMarginHint);
 qs("#pCost").addEventListener("input", updateMarginHint);
+
+// Aviso en vivo para que quede claro CUÁNDO se va a ver la oferta: el campo
+// "Precio anterior" tiene que ser MAYOR que "Precio" (arriba, "Precio" es lo
+// que estás cobrando AHORA, y "Precio anterior" es lo que costaba ANTES).
+// Si se ponen al revés (precio anterior más bajo que el actual), la tarjeta
+// no muestra oferta ni tachado, y esto lo avisa antes de guardar.
+function updateOldPriceHint(){
+  const price = parseFloat(qs("#pPrice").value);
+  const oldPriceRaw = qs("#pOldPrice").value.trim();
+  const box = qs("#pOldPriceHint");
+  if(!oldPriceRaw){ box.textContent = ""; box.style.color = ""; return; }
+  const oldPrice = parseFloat(oldPriceRaw);
+  if(!isFinite(oldPrice)){ box.textContent = ""; box.style.color = ""; return; }
+  if(!isFinite(price) || price <= 0){
+    box.textContent = "Falta poner el Precio (arriba) para calcular el descuento.";
+    box.style.color = "#ffd166";
+    return;
+  }
+  if(oldPrice <= price){
+    box.textContent = `⚠️ Así NO se va a ver la oferta: el precio anterior (${state.config.currency} ${formatNumber(oldPrice)}) tiene que ser MAYOR que el precio actual (${state.config.currency} ${formatNumber(price)}). ¿Los pusiste al revés? Aquí arriba en "Precio" va lo que cobras AHORA (el más bajo), y aquí en "Precio anterior" va lo que costaba ANTES (el más alto).`;
+    box.style.color = "#ffd166";
+  }else{
+    const pct = Math.round(((oldPrice - price) / oldPrice) * 100);
+    box.textContent = `✅ Se verá como OFERTA -${pct}%: ${state.config.currency} ${formatNumber(oldPrice)} tachado → ${state.config.currency} ${formatNumber(price)}`;
+    box.style.color = "#6ee7b7";
+  }
+}
+qs("#pPrice").addEventListener("input", updateOldPriceHint);
+qs("#pOldPrice").addEventListener("input", updateOldPriceHint);
+
+function updateProductRateHint(){
+  const hint = qs("#pRateConversionHint");
+  const price = parseFloat(qs("#pPrice").value) || 0;
+  const customRate = parseFloat(qs("#pExchangeRate").value) || 0;
+  const rate = customRate || state.config.exchangeRate || 0;
+  const secCur = state.config.secondaryCurrency;
+  if(!rate || !secCur || !price){ hint.textContent = ""; return; }
+  const converted = rate ? (price / rate) : 0;
+  hint.textContent = `≈ ${secCur} ${formatNumber(converted)}` + (customRate ? " (tasa especial de este producto)" : " (tasa general)");
+}
+qs("#pPrice").addEventListener("input", updateProductRateHint);
+qs("#pExchangeRate").addEventListener("input", updateProductRateHint);
 
 function renderTagPills(){
   const row = qs("#pTagsRow");
@@ -2977,6 +3390,7 @@ function openProductModal(product){
   editingProduct = product || null;
   pendingPhotoBlob = null;
   pendingPhotoRemoved = false;
+  pendingPhotoFocus = null;
   pendingGallery = [];
   galleryChanged = false;
   if(product && product.galleryCount){
@@ -2988,6 +3402,8 @@ function openProductModal(product){
   qs("#pName").value = product ? product.name : "";
   qs("#pPrice").value = product ? product.price : "";
   qs("#pOldPrice").value = (product && product.oldPrice) ? product.oldPrice : "";
+  qs("#pExchangeRate").value = (product && product.customExchangeRate) ? product.customExchangeRate : "";
+  updateProductRateHint();
   qs("#pPromoLabel").value = product ? (product.promoLabel||"") : "";
   qs("#pUrgencyLabel").value = product ? (product.urgencyLabel||"") : "";
   qs("#pCategory").value = product ? (product.category||"") : "";
@@ -2996,6 +3412,7 @@ function openProductModal(product){
   qs("#pUnit").value = product ? (product.unit||"") : "";
   qs("#pInternalNote").value = product ? (product.internalNote||"") : "";
   updateMarginHint();
+  updateOldPriceHint();
   pendingTags = (product && Array.isArray(product.tags)) ? product.tags.slice() : [];
   renderTagPills();
   qs("#pIsNew").checked = !!(product && product.isNew);
@@ -3015,12 +3432,14 @@ function openProductModal(product){
   box.innerHTML = '<span>Sin foto</span>';
   box.classList.remove("has-img");
 
+  qs("#btnOpenPhotoCrop").style.display = "none";
   if(product && product.hasPhoto){
     getPhotoUrl(product.id).then(url=>{
       if(url){
         box.innerHTML = `<img src="${url}">`;
         box.classList.add("has-img");
         qs("#btnRemovePhoto").style.display = "inline-flex";
+        qs("#btnOpenPhotoCrop").style.display = "inline-flex";
       }
     });
   }
@@ -3158,6 +3577,7 @@ async function handleProductPhotoFile(file){
   if(!file) return;
   const box = qs("#photoPreviewBox");
   box.innerHTML = '<span class="spinner"></span>';
+  pendingPhotoFocus = null;
   try{
     const compressed = await compressImageFile(file);
     pendingPhotoBlob = compressed;
@@ -3166,6 +3586,7 @@ async function handleProductPhotoFile(file){
     box.innerHTML = `<img src="${url}">`;
     box.classList.add("has-img");
     qs("#btnRemovePhoto").style.display = "inline-flex";
+    qs("#btnOpenPhotoCrop").style.display = "inline-flex";
   }catch(err){
     console.error("Error procesando foto", err);
     pendingPhotoBlob = file;
@@ -3173,6 +3594,7 @@ async function handleProductPhotoFile(file){
     box.innerHTML = `<img src="${URL.createObjectURL(file)}">`;
     box.classList.add("has-img");
     qs("#btnRemovePhoto").style.display = "inline-flex";
+    qs("#btnOpenPhotoCrop").style.display = "inline-flex";
   }
 }
 qs("#btnTakePhoto").addEventListener("click", ()=>{
@@ -3233,6 +3655,8 @@ qs("#galleryPhotoInputCamera").addEventListener("change", async (e)=>{
 qs("#btnRemovePhoto").addEventListener("click", ()=>{
   pendingPhotoBlob = null;
   pendingPhotoRemoved = true;
+  pendingPhotoFocus = null;
+  qs("#btnOpenPhotoCrop").style.display = "none";
   qs("#photoPreviewBox").innerHTML = '<span>Sin foto</span>';
   qs("#photoPreviewBox").classList.remove("has-img");
   qs("#btnRemovePhoto").style.display = "none";
@@ -3247,6 +3671,11 @@ qs("#btnSaveProduct").addEventListener("click", async ()=>{
   const price = parseFloat(qs("#pPrice").value) || 0;
   const oldPriceRaw = qs("#pOldPrice").value.trim();
   const oldPrice = oldPriceRaw ? (parseFloat(oldPriceRaw) || null) : null;
+  const customExchangeRateRaw = qs("#pExchangeRate").value.trim();
+  const customExchangeRate = customExchangeRateRaw ? (parseFloat(customExchangeRateRaw) || null) : null;
+  if(oldPrice && oldPrice <= price){
+    toast("⚠️ Guardado, pero la oferta no se va a ver: el precio anterior debe ser MAYOR al precio actual");
+  }
   const promoLabel = qs("#pPromoLabel").value.trim();
   const urgencyLabel = qs("#pUrgencyLabel").value.trim();
   const category = qs("#pCategory").value.trim();
@@ -3275,20 +3704,26 @@ qs("#btnSaveProduct").addEventListener("click", async ()=>{
   let product = editingProduct;
   try{
     if(!product){
-      product = { id: uid(), name, price, oldPrice, promoLabel, urgencyLabel, category, sku, tags, cost, unit, internalNote, hasPhoto:false, available:true, isNew: markedNew, addedAt: Date.now(), priceUpdatedAt: Date.now(), useMosaic, mosaicLayout, cardStyleOverride, cardFormatOverride, colorOverride };
+      product = { id: uid(), name, price, oldPrice, promoLabel, urgencyLabel, category, sku, tags, cost, unit, internalNote, hasPhoto:false, available:true, isNew: markedNew, addedAt: Date.now(), priceUpdatedAt: Date.now(), useMosaic, mosaicLayout, cardStyleOverride, cardFormatOverride, colorOverride, customExchangeRate };
     }else{
       if(product.price !== price) product.priceUpdatedAt = Date.now();
-      product.name = name; product.price = price; product.oldPrice = oldPrice; product.promoLabel = promoLabel; product.urgencyLabel = urgencyLabel; product.category = category; product.sku = sku; product.tags = tags; product.cost = cost; product.unit = unit; product.internalNote = internalNote; product.isNew = markedNew; product.useMosaic = useMosaic; product.mosaicLayout = mosaicLayout; product.cardStyleOverride = cardStyleOverride; product.cardFormatOverride = cardFormatOverride; product.colorOverride = colorOverride;
+      product.name = name; product.price = price; product.oldPrice = oldPrice; product.promoLabel = promoLabel; product.urgencyLabel = urgencyLabel; product.category = category; product.sku = sku; product.tags = tags; product.cost = cost; product.unit = unit; product.internalNote = internalNote; product.isNew = markedNew; product.useMosaic = useMosaic; product.mosaicLayout = mosaicLayout; product.cardStyleOverride = cardStyleOverride; product.cardFormatOverride = cardFormatOverride; product.colorOverride = colorOverride; product.customExchangeRate = customExchangeRate;
     }
 
     if(pendingPhotoBlob){
       await setPhoto(product.id, pendingPhotoBlob);
       product.hasPhoto = true;
-      photoUrlCache.delete(product.id);
+      invalidatePhotoUrl(product.id);
     }else if(pendingPhotoRemoved){
       await deletePhoto(product.id);
       product.hasPhoto = false;
-      photoUrlCache.delete(product.id);
+      invalidatePhotoUrl(product.id);
+    }
+    if(pendingPhotoFocus){
+      product.photoFocus = pendingPhotoFocus;
+    }else if(pendingPhotoRemoved || pendingPhotoBlob){
+      // foto nueva o quitada: el recorte anterior ya no aplica
+      delete product.photoFocus;
     }
 
     if(galleryChanged){
@@ -3319,7 +3754,7 @@ qs("#btnDeleteProduct").addEventListener("click", async ()=>{
   for(let i=0; i<(editingProduct.galleryCount||0); i++){
     await deletePhoto(galleryKey(editingProduct.id, i));
   }
-  photoUrlCache.delete(editingProduct.id);
+  invalidatePhotoUrl(editingProduct.id);
   state.products = state.products.filter(p=>p.id !== editingProduct.id);
   if(state.oosSnapshot && state.oosSnapshot.productIds){
     state.oosSnapshot.productIds = state.oosSnapshot.productIds.filter(id => id !== editingProduct.id);
@@ -3574,7 +4009,7 @@ qs("#btnConfirmBulkPhotos").addEventListener("click", async ()=>{
       try{
         const compressed = await compressImageFile(item.file);
         await setPhoto(item.assignedId, compressed);
-        photoUrlCache.delete(item.assignedId);
+        invalidatePhotoUrl(item.assignedId);
         const product = state.products.find(p=>p.id === item.assignedId);
         if(product) product.hasPhoto = true;
         savedCount++;
@@ -3673,6 +4108,40 @@ function drawImageCover(ctx, img, x, y, w, h){
   }
   ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
+/* ---- Recorte / zoom / paneo de la foto del producto. Por defecto (sin
+   ajuste) se comporta exactamente como drawImageCover (foto centrada llenando
+   el marco). Si el producto tiene un "photoFocus" guardado (desde el editor
+   de foto), se usa zoom (1 = normal, hasta 3 = más acercado) y ox/oy (-1 a 1)
+   para mover el recorte dentro de la foto. ---- */
+function getPhotoFocus(product, cfg){
+  const f = (product && product.photoFocus) || (cfg && cfg.photoFocusDefault) || {};
+  return {
+    zoom: (typeof f.zoom === "number" && f.zoom > 0) ? f.zoom : 1,
+    ox: (typeof f.ox === "number") ? f.ox : 0,
+    oy: (typeof f.oy === "number") ? f.oy : 0
+  };
+}
+function hasCustomPhotoFocus(product){
+  const f = product && product.photoFocus;
+  return !!(f && ((f.zoom && f.zoom !== 1) || f.ox || f.oy));
+}
+function drawImageWithFocus(ctx, img, x, y, w, h, focus){
+  focus = focus || {zoom:1, ox:0, oy:0};
+  const zoom = Math.max(1, Math.min(3.5, focus.zoom || 1));
+  const ir = img.width / img.height;
+  const r = w / h;
+  let baseSw, baseSh;
+  if(ir > r){ baseSh = img.height; baseSw = baseSh * r; }
+  else{ baseSw = img.width; baseSh = baseSw / r; }
+  const sw = baseSw / zoom, sh = baseSh / zoom;
+  const cx = (img.width - baseSw) / 2, cy = (img.height - baseSh) / 2;
+  const panRangeX = baseSw - sw, panRangeY = baseSh - sh;
+  let sx = cx + (panRangeX/2) * (1 + (focus.ox||0));
+  let sy = cy + (panRangeY/2) * (1 + (focus.oy||0));
+  sx = Math.max(0, Math.min(img.width - sw, sx));
+  sy = Math.max(0, Math.min(img.height - sh, sy));
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
 function getWrappedLines(ctx, text, maxWidth, maxLines, font){
   if(font) ctx.font = font;
   const words = String(text).split(" ");
@@ -3693,6 +4162,28 @@ function getWrappedLines(ctx, text, maxWidth, maxLines, font){
     lines[maxLines-1] = lines[maxLines-1].replace(/\s*\S*$/, "") + "…";
   }
   return lines;
+}
+/* Ajusta el tamaño de fuente de un título hacia abajo (en pasos de 2px) hasta que
+   quepa en maxLines líneas sin tener que truncar con "…". Así, cuando un producto
+   tiene un nombre muy largo, el texto se hace más chico en vez de recortarse o
+   invadir otros elementos de la tarjeta. Si ni siquiera al tamaño mínimo cabe,
+   recién ahí se trunca (mismo comportamiento de antes, como último recurso). */
+function fitTitleFont(ctx, text, maxWidth, maxLines, weight, baseSizePx, family, minSizePx){
+  minSizePx = minSizePx || Math.max(18, Math.round(baseSizePx*0.62));
+  let size = Math.max(baseSizePx, minSizePx);
+  let font = `${weight} ${size}px ${family}`;
+  let lines = getWrappedLines(ctx, text, maxWidth, null, font);
+  while(lines.length > maxLines && size > minSizePx){
+    size = Math.max(minSizePx, size - 2);
+    font = `${weight} ${size}px ${family}`;
+    lines = getWrappedLines(ctx, text, maxWidth, null, font);
+  }
+  if(lines.length > maxLines){
+    font = `${weight} ${size}px ${family}`;
+    lines = getWrappedLines(ctx, text, maxWidth, maxLines, font);
+  }
+  ctx.font = font;
+  return { lines, size, font };
 }
 function wrapText(ctx, text, x, y, maxWidth, lineHeight, maxLines){
   const lines = getWrappedLines(ctx, text, maxWidth, maxLines);
@@ -3972,7 +4463,7 @@ function drawQrOverlay(ctx, W, H, product, cfg){
   const box = Math.round(Math.min(W,H) * 0.20); // tamaño del QR en la tarjeta
   const quiet = Math.max(2, Math.round(box*0.06)); // margen blanco alrededor
   const total = box + quiet*2;
-  const pos = cfg.qrPosition || "bl";
+  const pos = (_cardCorners && _cardCorners.qr) ? _cardCorners.qr : (cfg.qrPosition || "bl");
   const padC = Math.round(W*0.045);
   let x,y;
   if(pos === "br"){ x = W - padC - total; y = H - padC - total; }
@@ -4025,9 +4516,44 @@ function getCardTuning(cfg){
     lowStockEnabled: t.lowStockEnabled !== false,
     lowStockThreshold: (t.lowStockThreshold !== undefined && t.lowStockThreshold !== null && t.lowStockThreshold !== "") ? Number(t.lowStockThreshold) : 2,
     lowStockPos: t.lowStockPos || "tr",
+    ofertaPos: t.ofertaPos || "auto",
     blurScale: (t.blurScale !== undefined && t.blurScale !== null && t.blurScale !== "") ? Number(t.blurScale) : 1,
     contactScale: (t.contactScale !== undefined && t.contactScale !== null && t.contactScale !== "") ? Number(t.contactScale) : 1
   };
+}
+/* ---- Ajuste de posiciones sobre un estilo YA EXISTENTE (no crea nada nuevo,
+   solo desplaza cada elemento -foto, logo, nombre, categoría, precio,
+   contacto- respecto a donde ese estilo lo pone normalmente). Se guarda como
+   fracción de W/H por estilo, en cfg.customLayoutByStyle[estilo][elemento] =
+   {fx,fy}, así cada estilo conserva su propio ajuste. ---- */
+const STYLE_LAYOUT_ELS = ["photo","logo","storeName","category","name","price","contact"];
+function getStyleOffsetsPx(cfg, styleKey, W, H){
+  const raw = (cfg.customLayoutByStyle && cfg.customLayoutByStyle[styleKey]) || {};
+  const out = {};
+  STYLE_LAYOUT_ELS.forEach(k=>{
+    const o = raw[k] || {};
+    out[k] = { dx: (o.fx||0) * W, dy: (o.fy||0) * H };
+  });
+  return out;
+}
+// Aproximación de dónde cae cada elemento en cada estilo (solo se usa para
+// ubicar el "manijero" de arrastre al abrir el editor; el dibujo real lo hace
+// cada función drawCardXxx con su propio layout + el ajuste guardado).
+const STYLE_HANDLE_ANCHORS = {
+  clasica:      { logo:{x:0.16,y:0.10}, storeName:{x:0.42,y:0.10}, category:{x:0.22,y:0.245}, name:{x:0.5,y:0.34}, photo:{x:0.5,y:0.56}, price:{x:0.82,y:0.90}, contact:{x:0.35,y:0.955} },
+  protagonista: { logo:{x:0.10,y:0.06}, storeName:{x:0.5,y:0.90},  category:{x:0.22,y:0.855}, name:{x:0.5,y:0.90},  photo:{x:0.5,y:0.44}, price:{x:0.82,y:0.10} },
+  minimal:      { logo:{x:0.14,y:0.09}, storeName:{x:0.45,y:0.09}, category:{x:0.2,y:0.185},  name:{x:0.5,y:0.72}, photo:{x:0.5,y:0.45}, price:{x:0.2,y:0.84}, contact:{x:0.4,y:0.96} },
+  franja:       { logo:{x:0.13,y:0.09}, storeName:{x:0.13,y:0.19}, category:{x:0.13,y:0.28},  name:{x:0.68,y:0.12}, photo:{x:0.68,y:0.5}, price:{x:0.75,y:0.88}, contact:{x:0.13,y:0.84} },
+  oscura:       { logo:{x:0.5,y:0.10},  storeName:{x:0.5,y:0.15},  category:{x:0.5,y:0.24},   name:{x:0.5,y:0.32}, photo:{x:0.5,y:0.55}, price:{x:0.5,y:0.87}, contact:{x:0.5,y:0.965} },
+  vibrante:     { logo:{x:0.16,y:0.10}, storeName:{x:0.45,y:0.10}, category:{x:0.22,y:0.24},  name:{x:0.5,y:0.35}, photo:{x:0.5,y:0.58}, price:{x:0.25,y:0.90}, contact:{x:0.45,y:0.96} },
+  polaroid:     { logo:{x:0.16,y:0.08}, storeName:{x:0.45,y:0.08}, category:{x:0.5,y:0.75},   name:{x:0.5,y:0.80}, photo:{x:0.5,y:0.44}, price:{x:0.5,y:0.90}, contact:{x:0.5,y:0.965} },
+  cinta:        { logo:{x:0.16,y:0.09}, storeName:{x:0.45,y:0.09}, category:{x:0.2,y:0.19},   name:{x:0.5,y:0.86}, photo:{x:0.5,y:0.5}, price:{x:0.84,y:0.16}, contact:{x:0.4,y:0.96} },
+  revista:      { logo:{x:0.16,y:0.08}, storeName:{x:0.45,y:0.08}, category:{x:0.14,y:0.80},  name:{x:0.5,y:0.86}, photo:{x:0.5,y:0.5}, price:{x:0.85,y:0.90}, contact:{x:0.4,y:0.965} },
+  boutique:     { logo:{x:0.5,y:0.09},  storeName:{x:0.5,y:0.15},  category:{x:0.5,y:0.70},   name:{x:0.5,y:0.77}, photo:{x:0.5,y:0.42}, price:{x:0.5,y:0.90}, contact:{x:0.5,y:0.97} },
+  mosaico:      { logo:{x:0.16,y:0.08}, storeName:{x:0.45,y:0.08}, category:{x:0.2,y:0.17},   name:{x:0.5,y:0.26}, photo:{x:0.5,y:0.55}, price:{x:0.5,y:0.85}, contact:{x:0.5,y:0.97} }
+};
+function getStyleHandleAnchors(styleKey){
+  return STYLE_HANDLE_ANCHORS[styleKey] || STYLE_HANDLE_ANCHORS.clasica;
 }
 function isPriceOverridden(cfg){
   const T = getCardTuning(cfg);
@@ -4040,7 +4566,7 @@ function isPriceOverridden(cfg){
 function drawPriceTagGeneric(ctx, cfg, accent, product, anchorBox){
   const T = getCardTuning(cfg);
   const bg = T.priceBg === "auto" ? "tag" : T.priceBg;
-  const pos = T.pricePos === "auto" ? "br" : T.pricePos;
+  const pos = (_cardCorners && _cardCorners.price) ? _cardCorners.price : (T.pricePos === "auto" ? "br" : T.pricePos);
   const priceText = cfg.currency + " " + formatNumber(product.price);
   const priceFontPx = Math.round(60 * T.priceScale);
   const labelFontPx = Math.round(24 * T.priceScale);
@@ -4244,11 +4770,21 @@ async function renderCardToCanvas(canvas, product){
   const H = fmt === "alargado" ? 1920 : (fmt === "vertical" ? 1350 : 1080);
   const hd = (cfg.exportQuality || "estandar") === "hd";
   const scale = hd ? 1.5 : 1;
-  canvas.width = W*scale; canvas.height = H*scale;
-  const ctx = canvas.getContext("2d");
-  ctx.scale(scale, scale);
   const accent = getProductAccentColor(product, cfg);
   const pad = 56;
+
+  // Se calcula ANTES de dibujar el estilo para que, si el precio está
+  // posicionado a mano (Ajustes finos), ya sepa en qué esquina le toca caer
+  // sin chocar con el QR/las insignias que se dibujan después, y para saber
+  // desde ya si hace falta estirar un poco la tarjeta (ver computeCornerStretch).
+  const T = getCardTuning(cfg);
+  _cardCorners = resolveCardCorners(product, cfg, T);
+  const stretch = computeCornerStretch(_cardCorners, H);
+  const totalH = H + stretch.top + stretch.bottom;
+
+  canvas.width = W*scale; canvas.height = totalH*scale;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
 
   let img = null;
   if(product.hasPhoto){
@@ -4282,44 +4818,69 @@ async function renderCardToCanvas(canvas, product){
     }
   }
 
-  if(style === "protagonista"){
-    await drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "minimal"){
-    await drawCardMinimal(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "franja"){
-    await drawCardFranja(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "oscura"){
-    await drawCardOscura(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "vibrante"){
-    await drawCardVibrante(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "polaroid"){
-    await drawCardPolaroid(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "cinta"){
-    await drawCardCinta(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "revista"){
-    await drawCardRevista(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "boutique"){
-    await drawCardBoutique(ctx, W, H, product, img, cfg, accent, pad);
-  }else if(style === "mosaico"){
-    await drawCardMosaico(ctx, W, H, product, img, galleryImgs, cfg, accent, pad);
-  }else{
-    await drawCardClasica(ctx, W, H, product, img, cfg, accent, pad);
+  // Si no hace falta estirar la tarjeta, todo se dibuja directo sobre el
+  // lienzo final, igual que siempre. Si hace falta (3 insignias apiladas en
+  // una misma esquina), el contenido normal de la tarjeta (foto, textos) se
+  // dibuja aparte, del tamaño de siempre, y se pega centrado en el lienzo ya
+  // más alto, "clonando" el borde de arriba/abajo para que la transición no
+  // se note — así el apilado de insignias tiene su propio espacio y no tapa
+  // ni la foto ni el texto.
+  let drawCtx = ctx;
+  let buffer = null;
+  if(stretch.top > 0 || stretch.bottom > 0){
+    buffer = document.createElement("canvas");
+    buffer.width = W; buffer.height = H;
+    drawCtx = buffer.getContext("2d");
   }
 
-  if(cfg.watermarkOn) drawWatermark(ctx, W, H, cfg);
-  const T = getCardTuning(cfg);
-  if(isOutOfStock(product)){
-    drawOutOfStockRibbon(ctx, W, H, T);
+  if(style === "protagonista"){
+    await drawCardProtagonista(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "minimal"){
+    await drawCardMinimal(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "franja"){
+    await drawCardFranja(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "oscura"){
+    await drawCardOscura(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "vibrante"){
+    await drawCardVibrante(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "polaroid"){
+    await drawCardPolaroid(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "cinta"){
+    await drawCardCinta(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "revista"){
+    await drawCardRevista(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "boutique"){
+    await drawCardBoutique(drawCtx, W, H, product, img, cfg, accent, pad);
+  }else if(style === "mosaico"){
+    await drawCardMosaico(drawCtx, W, H, product, img, galleryImgs, cfg, accent, pad);
   }else{
-    drawLowStockBadge(ctx, W, H, product, T);
+    await drawCardClasica(drawCtx, W, H, product, img, cfg, accent, pad);
+  }
+
+  if(cfg.watermarkOn) drawWatermark(drawCtx, W, H, cfg);
+  const outOfStock = isOutOfStock(product);
+  if(outOfStock) drawOutOfStockRibbon(drawCtx, W, H, T);
+
+  if(buffer){
+    if(stretch.top > 0) ctx.drawImage(buffer, 0, 0, W, 1, 0, 0, W, stretch.top);
+    ctx.drawImage(buffer, 0, stretch.top);
+    if(stretch.bottom > 0) ctx.drawImage(buffer, 0, H-1, W, 1, 0, stretch.top+H, W, stretch.bottom);
+  }
+
+  // Las insignias de esquina (pocas unidades, marco de oferta, OFERTA,
+  // urgencia) y el QR se dibujan siempre sobre el lienzo FINAL, ya estirado
+  // si hizo falta, para aprovechar el espacio extra cuando hay varias juntas.
+  if(!outOfStock){
+    drawLowStockBadge(ctx, W, totalH, product, T);
     const frameStyle = cfg.promoFrameStyle || "borde";
     const frameHasOwnText = (frameStyle === "cinta" || frameStyle === "franja");
-    drawPromoFrame(ctx, W, H, product, cfg, frameStyle);
+    drawPromoFrame(ctx, W, totalH, product, cfg, frameStyle);
     // si el marco ya trae su propio texto (cinta/franja), no repetimos el sello de OFERTA arriba
-    if(!(frameHasOwnText && isOnSale(product))) drawOfertaBadge(ctx, W, H, product, T);
-    drawUrgencyBadge(ctx, W, H, product, T);
+    if(!(frameHasOwnText && isOnSale(product))) drawOfertaBadge(ctx, W, totalH, product, T);
+    drawUrgencyBadge(ctx, W, totalH, product, T);
   }
-  drawQrOverlay(ctx, W, H, product, cfg);
+  drawQrOverlay(ctx, W, totalH, product, cfg);
+  _cardCorners = null;
 }
 
 function drawWatermark(ctx, W, H, cfg){
@@ -4391,6 +4952,37 @@ function drawOutOfStockRibbon(ctx, W, H, T){
     return;
   }
 
+  if(pos === "cover"){
+    // oscurece toda la tarjeta (foto + info) y pone el texto "AGOTADO" al centro,
+    // SIN banda roja de fondo, para que el producto se siga distinguiendo debajo
+    // del oscurecido (como en la referencia del usuario).
+    ctx.save();
+    ctx.fillStyle = "rgba(15,15,15,0.62)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(W/2, H/2);
+    let fontSize = Math.round(H * 0.09 * scale);
+    ctx.font = "800 " + fontSize + "px " + FONT_DISPLAY;
+    while(ctx.measureText(text).width > W*0.86 && fontSize > 18){
+      fontSize -= 3;
+      ctx.font = "800 " + fontSize + "px " + FONT_DISPLAY;
+    }
+    ctx.shadowColor = "rgba(0,0,0,0.65)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    try{ ctx.letterSpacing = Math.round(fontSize*0.06) + "px"; }catch(e){}
+    ctx.fillText(text, 0, 0);
+    try{ ctx.letterSpacing = "0px"; }catch(e){}
+    ctx.shadowColor = "transparent";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.restore();
+    return;
+  }
+
   // "diagonal" (comportamiento clásico): banda diagonal grande en la mitad
   // inferior de la tarjeta (zona de la foto), para no tapar nunca el nombre.
   ctx.save();
@@ -4425,8 +5017,10 @@ function drawOutOfStockRibbon(ctx, W, H, T){
 }
 
 // Insignia compacta reutilizable para colocar en una esquina (AGOTADO chico o Pocas unidades)
-function drawCornerBadge(ctx, W, H, text, color, corner, scale){
+function cornerBadgeHeight(scale){ return Math.round(64*(scale||1)); }
+function drawCornerBadge(ctx, W, H, text, color, corner, scale, stackOffsetPx){
   scale = scale || 1;
+  stackOffsetPx = stackOffsetPx || 0;
   const padC = Math.round(W*0.045);
   ctx.save();
   ctx.font = "800 " + Math.round(38*scale) + "px " + FONT_DISPLAY;
@@ -4434,10 +5028,10 @@ function drawCornerBadge(ctx, W, H, text, color, corner, scale){
   const badgeW = Math.min(W*0.62, textW + Math.round(56*scale));
   const badgeH = Math.round(64*scale);
   let bx, by;
-  if(corner === "tl"){ bx = padC; by = padC; }
-  else if(corner === "tr"){ bx = W - padC - badgeW; by = padC; }
-  else if(corner === "bl"){ bx = padC; by = H - padC - badgeH; }
-  else { bx = W - padC - badgeW; by = H - padC - badgeH; }
+  if(corner === "tl"){ bx = padC; by = padC + stackOffsetPx; }
+  else if(corner === "tr"){ bx = W - padC - badgeW; by = padC + stackOffsetPx; }
+  else if(corner === "bl"){ bx = padC; by = H - padC - badgeH - stackOffsetPx; }
+  else { bx = W - padC - badgeW; by = H - padC - badgeH - stackOffsetPx; }
 
   ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 3;
   ctx.fillStyle = color;
@@ -4461,6 +5055,121 @@ function drawCornerBadge(ctx, W, H, text, color, corner, scale){
   ctx.restore();
 }
 
+// Guarda, mientras se genera UNA tarjeta, en qué esquina va cada cosa (ver
+// resolveCardCorners más abajo). Es seguro como variable de módulo porque
+// renderCardToCanvas siempre se espera (await) una tarjeta a la vez, nunca
+// varias en paralelo.
+let _cardCorners = null;
+
+/* ============================================================
+   REPARTO AUTOMÁTICO DE ESQUINAS — evita que el precio (si se movió a mano),
+   la insignia de OFERTA, la de "pocas unidades", la de urgencia y el QR
+   terminen amontonados/tapados entre sí en la tarjeta.
+
+   El precio (si se movió a mano) y el QR son "exclusivos": cada uno pide su
+   esquina y, si ya está tomada, se corre a la esquina libre más parecida.
+
+   OFERTA, "pocas unidades" y urgencia, en cambio, cuando dos o más quieren
+   la MISMA esquina, en vez de correrse a otra se APILAN ahí, una debajo de
+   la otra (con un pequeño espacio entre medio) — así José las ve juntas,
+   como pidió, en vez de repartidas por toda la tarjeta.
+
+   Si el apilado en una esquina crece demasiado (3 insignias juntas), se
+   calcula cuánto "estirar" la tarjeta (ver computeCornerStretch) para que
+   ese apilado tenga espacio propio y no tape la foto ni el texto de abajo.
+   ============================================================ */
+const CORNER_FALLBACK_ORDER = {
+  tl: ["tl","bl","tr","br"],
+  tr: ["tr","br","tl","bl"],
+  bl: ["bl","tl","br","tr"],
+  br: ["br","tr","bl","tl"]
+};
+const CORNER_STACK_GAP = 24; // separación entre insignias apiladas (W siempre es 1080)
+function resolveCardCorners(product, cfg, T){
+  const out = {
+    price:null, oferta:null, lowStock:null, urgency:null, qr:null,
+    stacks: { tl:[], tr:[], bl:[], br:[] }
+  };
+  const taken = new Set();        // esquinas con algo EXCLUSIVO (precio, QR)
+  const stackCorners = new Set(); // esquinas donde ya hay una o más insignias apiladas
+  const claim = (key, preferred)=>{
+    const order = CORNER_FALLBACK_ORDER[preferred] || ["tl","tr","bl","br"];
+    let chosen = order.find(c=>!taken.has(c) && !stackCorners.has(c));
+    if(!chosen) chosen = order.find(c=>!taken.has(c)) || preferred;
+    taken.add(chosen);
+    out[key] = chosen;
+  };
+  const stackItem = (key, preferred, heightPx)=>{
+    let corner = preferred;
+    if(taken.has(corner) && !stackCorners.has(corner)){
+      // esa esquina ya la usa algo exclusivo (precio movido a mano) — se
+      // busca la siguiente esquina libre en vez de tapar el precio
+      const order = CORNER_FALLBACK_ORDER[preferred] || ["tl","tr","bl","br"];
+      corner = order.find(c=> !taken.has(c) || stackCorners.has(c)) || preferred;
+    }
+    const stack = out.stacks[corner];
+    const offset = stack.reduce((sum,s)=> sum + s.heightPx + CORNER_STACK_GAP, 0);
+    out[key] = corner;
+    out[key+"Offset"] = offset;
+    stack.push({ key, heightPx });
+    stackCorners.add(corner);
+    taken.add(corner);
+  };
+  // Orden de prioridad: primero lo que José posicionó a mano (precio), luego
+  // lo más importante para vender (oferta), después stock y urgencia, y el
+  // QR al final — es lo menos crítico de mover si hay que hacerle espacio.
+  if(isPriceOverridden(cfg)){
+    claim("price", T.pricePos === "auto" ? "br" : T.pricePos);
+  }
+  const outOfStock = isOutOfStock(product);
+  if(!outOfStock && isOnSale(product)){
+    const frameStyle = cfg.promoFrameStyle || "borde";
+    const frameHasOwnText = (frameStyle === "cinta" || frameStyle === "franja");
+    if(!frameHasOwnText){
+      const preferred = (T.ofertaPos && T.ofertaPos !== "auto") ? T.ofertaPos : ((T.lowStockPos === "tl") ? "tr" : "tl");
+      stackItem("oferta", preferred, cornerBadgeHeight(0.86));
+    }
+  }
+  if(!outOfStock && T.lowStockEnabled){
+    const qty = product.qty;
+    if(qty !== undefined && qty !== null && qty !== "" && !isNaN(qty)){
+      const q = Number(qty);
+      const threshold = T.lowStockThreshold !== undefined ? T.lowStockThreshold : 2;
+      if(q > 0 && q <= threshold){
+        stackItem("lowStock", T.lowStockPos || "tr", cornerBadgeHeight(0.86));
+      }
+    }
+  }
+  if(!outOfStock && product.urgencyLabel && product.urgencyLabel.trim()){
+    stackItem("urgency", "bl", cornerBadgeHeight(0.8));
+  }
+  if(cfg.qrEnabled && buildWhatsappQrText(product, cfg)){
+    claim("qr", cfg.qrPosition || "bl");
+  }
+  return out;
+}
+
+// Cuánto hay que "estirar" la tarjeta (arriba y/o abajo) para que un apilado
+// de insignias muy alto (3 juntas) no quede pegado o tapando la foto/el
+// texto. Con 1 o 2 insignias apiladas casi nunca hace falta estirar nada
+// (entran en el margen que casi cualquier estilo deja libre); con 3 juntas,
+// se agrega justo el espacio que falte.
+function computeCornerStretch(corners, H){
+  if(!corners || !corners.stacks) return { top:0, bottom:0 };
+  const stackHeight = (corner)=>{
+    const items = corners.stacks[corner];
+    if(!items || !items.length) return 0;
+    return items.reduce((sum,it)=> sum + it.heightPx, 0) + (items.length-1)*CORNER_STACK_GAP;
+  };
+  const BASE_BUDGET = Math.round(H*0.15);
+  const topH = Math.max(stackHeight("tl"), stackHeight("tr"));
+  const botH = Math.max(stackHeight("bl"), stackHeight("br"));
+  return {
+    top: Math.max(0, topH - BASE_BUDGET),
+    bottom: Math.max(0, botH - BASE_BUDGET)
+  };
+}
+
 // Insignia de "pocas unidades" — solo si el producto tiene stock numérico,
 // mayor que 0 y menor o igual al umbral configurado (por defecto 2).
 function drawLowStockBadge(ctx, W, H, product, T){
@@ -4472,7 +5181,9 @@ function drawLowStockBadge(ctx, W, H, product, T){
   const threshold = T.lowStockThreshold !== undefined ? T.lowStockThreshold : 2;
   if(q <= 0 || q > threshold) return;
   const text = q === 1 ? "¡ÚLTIMA UNIDAD!" : `¡SOLO ${q} UNIDADES!`;
-  drawCornerBadge(ctx, W, H, text, "#c2620a", T.lowStockPos || "tr", 0.86);
+  const corner = (_cardCorners && _cardCorners.lowStock) ? _cardCorners.lowStock : (T.lowStockPos || "tr");
+  const stackOffset = (_cardCorners && _cardCorners.lowStockOffset) || 0;
+  drawCornerBadge(ctx, W, H, text, "#c2620a", corner, 0.86, stackOffset);
 }
 
 // Un producto está "en oferta" si tiene un precio anterior mayor al actual.
@@ -4495,8 +5206,15 @@ function drawOfertaBadge(ctx, W, H, product, T){
   }else{
     text = pct > 0 ? `OFERTA -${pct}%` : "OFERTA";
   }
-  const pos = (T && T.lowStockPos === "tl") ? "tr" : "tl";
-  drawCornerBadge(ctx, W, H, text, "#dc2626", pos, 0.86);
+  let pos;
+  if(_cardCorners && _cardCorners.oferta){
+    pos = _cardCorners.oferta;
+  }else if(T && T.ofertaPos && T.ofertaPos !== "auto"){
+    pos = T.ofertaPos;
+  }else{
+    pos = (T && T.lowStockPos === "tl") ? "tr" : "tl";
+  }
+  drawCornerBadge(ctx, W, H, text, "#dc2626", pos, 0.86, (_cardCorners && _cardCorners.ofertaOffset) || 0);
 }
 
 // Marco de promoción: envuelve/decora TODA la tarjeta cuando el producto está en
@@ -4581,84 +5299,148 @@ function drawPromoFrame(ctx, W, H, product, cfg, frameStyle){
 function drawUrgencyBadge(ctx, W, H, product, T){
   const text = product.urgencyLabel && product.urgencyLabel.trim();
   if(!text) return;
-  drawCornerBadge(ctx, W, H, text.toUpperCase(), "#7e22ce", "bl", 0.8);
+  const corner = (_cardCorners && _cardCorners.urgency) ? _cardCorners.urgency : "bl";
+  drawCornerBadge(ctx, W, H, text.toUpperCase(), "#7e22ce", corner, 0.8, (_cardCorners && _cardCorners.urgencyOffset) || 0);
 }
 
 // Tarjeta de COMBO: junta 2 o 3 fotos de producto lado a lado con un precio
 // combinado, mostrando cuánto se ahorra respecto a comprarlos por separado.
 // Se dibuja aparte (no reusa los estilos normales) porque su composición es
 // distinta: varias fotos en vez de una sola.
-async function drawComboCard(ctx, W, H, combo, productsWithImg, cfg){
-  const accent = cfg.primaryColor || "#16a34a";
-  const pad = 56;
+/* ---- Temas visuales para las tarjetas de combo. Cada tema define fondo,
+   colores de texto y estilo del sello, reutilizando el mismo layout de fotos
+   (salvo "apilado" y "grid", que tienen su propio acomodo de fotos). ---- */
+function getComboTheme(styleKey, accent){
+  const THEMES = {
+    clasica:  { bg:"gradient", text:"#ffffff", muted:"rgba(255,255,255,0.65)", labelBg:"#dc2626", labelText:"#ffffff", photoBorder:"rgba(255,255,255,0.3)", font:FONT_DISPLAY },
+    minimal:  { bg:"light",    text:"#111111", muted:"rgba(17,17,17,0.55)",    labelBg:"#111111", labelText:"#ffffff", photoBorder:"rgba(0,0,0,0.12)", font:FONT_DISPLAY },
+    franja:   { bg:"stripe",   text:"#ffffff", muted:"rgba(255,255,255,0.7)",  labelBg:"#ffffff", labelText: accent,   photoBorder:"rgba(255,255,255,0.35)", font:FONT_DISPLAY },
+    oscura:   { bg:"dark",     text:"#ffffff", muted:"rgba(255,255,255,0.55)", labelBg: accent,    labelText:"#0a0a0a", photoBorder:"rgba(255,255,255,0.18)", font:FONT_DISPLAY },
+    vibrante: { bg:"vibrant",  text:"#ffffff", muted:"rgba(255,255,255,0.85)", labelBg:"#ffffff", labelText: accent,   photoBorder:"rgba(255,255,255,0.5)", font:FONT_DISPLAY },
+    polaroid: { bg:"light",    text:"#111111", muted:"rgba(17,17,17,0.55)",    labelBg:"#dc2626", labelText:"#ffffff", photoBorder:"#ffffff", font:FONT_DISPLAY },
+    cinta:    { bg:"gradient", text:"#ffffff", muted:"rgba(255,255,255,0.65)", labelBg:"#dc2626", labelText:"#ffffff", photoBorder:"rgba(255,255,255,0.3)", font:FONT_DISPLAY, ribbon:true },
+    revista:  { bg:"light",    text:"#111111", muted:"rgba(17,17,17,0.55)",    labelBg:"#111111", labelText:"#ffffff", photoBorder:"rgba(0,0,0,0.1)", font:FONT_DISPLAY, editorial:true },
+    boutique: { bg:"pastel",   text:"#3a2f28", muted:"rgba(58,47,40,0.65)",    labelBg: accent,    labelText:"#ffffff", photoBorder:"rgba(58,47,40,0.15)", font:FONT_DISPLAY, serif:true },
+    apilado:  { bg:"gradient", text:"#ffffff", muted:"rgba(255,255,255,0.65)", labelBg:"#dc2626", labelText:"#ffffff", photoBorder:"#ffffff", font:FONT_DISPLAY },
+    grid:     { bg:"dark",     text:"#ffffff", muted:"rgba(255,255,255,0.55)", labelBg: accent,    labelText:"#0a0a0a", photoBorder:"rgba(255,255,255,0.18)", font:FONT_DISPLAY }
+  };
+  return THEMES[styleKey] || THEMES.clasica;
+}
 
-  const bgGrad = ctx.createLinearGradient(0,0,W,H);
-  bgGrad.addColorStop(0, shadeColor(accent, -0.90));
-  bgGrad.addColorStop(1, shadeColor(accent, -0.65));
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0,0,W,H);
-  const vig = ctx.createRadialGradient(W/2, H*0.35, H*0.2, W/2, H*0.55, H*0.85);
-  vig.addColorStop(0, "rgba(0,0,0,0)");
-  vig.addColorStop(1, "rgba(0,0,0,0.35)");
-  ctx.fillStyle = vig;
-  ctx.fillRect(0,0,W,H);
-
-  let cursorY = pad;
-  const hasHeader = !!(cfg.storeName || cfg.logo);
-  if(hasHeader){
-    const logoSize = 76;
-    let tx = pad;
-    if(cfg.logo){
-      const logoImg = await loadImg(cfg.logo);
-      if(logoImg){
-        ctx.save();
-        ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-        ctx.beginPath();
-        ctx.arc(pad+logoSize/2, cursorY+logoSize/2, logoSize/2, 0, Math.PI*2);
-        ctx.fillStyle = "#ffffff"; ctx.fill();
-        ctx.restore();
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(pad+logoSize/2, cursorY+logoSize/2, logoSize/2-4, 0, Math.PI*2);
-        ctx.clip();
-        drawImageCover(ctx, logoImg, pad+4, cursorY+4, logoSize-8, logoSize-8);
-        ctx.restore();
-        tx = pad+logoSize+18;
-      }
+function drawComboBg(ctx, W, H, theme, accent, style, productsWithImg){
+  // Estilo Clásica de combos: usa como fondo la foto de cualquiera de los
+  // productos elegidos (el primero que tenga foto), bien difuminada, en vez
+  // del degradado plano de siempre.
+  if(style === "clasica"){
+    const withImg = (productsWithImg||[]).find(p=> p && p.img);
+    if(withImg){
+      ctx.save();
+      try{ ctx.filter = "blur(46px)"; }catch(e){}
+      drawImageCover(ctx, withImg.img, -40, -40, W+80, H+80);
+      ctx.filter = "none";
+      ctx.restore();
+      const bgGrad = ctx.createLinearGradient(0,0,W,H);
+      bgGrad.addColorStop(0, "rgba(0,0,0,0.55)");
+      bgGrad.addColorStop(1, "rgba(0,0,0,0.72)");
+      ctx.fillStyle = bgGrad; ctx.fillRect(0,0,W,H);
+      const vig = ctx.createRadialGradient(W/2, H*0.35, H*0.2, W/2, H*0.55, H*0.85);
+      vig.addColorStop(0, "rgba(0,0,0,0)");
+      vig.addColorStop(1, "rgba(0,0,0,0.35)");
+      ctx.fillStyle = vig; ctx.fillRect(0,0,W,H);
+      return;
     }
-    if(cfg.storeName){
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "700 34px " + FONT_DISPLAY;
-      ctx.textBaseline = "middle";
-      ctx.fillText(truncateToWidth(ctx, cfg.storeName, W-tx-pad), tx, cursorY+logoSize/2+2);
-      ctx.textBaseline = "alphabetic";
-    }
-    cursorY += logoSize + 20;
   }
+  if(theme.bg === "light"){
+    ctx.fillStyle = "#f7f5f2"; ctx.fillRect(0,0,W,H);
+  }else if(theme.bg === "pastel"){
+    const g = ctx.createLinearGradient(0,0,W,H);
+    g.addColorStop(0, shadeColor(accent, 0.85));
+    g.addColorStop(1, shadeColor(accent, 0.72));
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  }else if(theme.bg === "dark"){
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0,0,W,H);
+  }else if(theme.bg === "vibrant"){
+    const g = ctx.createLinearGradient(0,0,W,H);
+    g.addColorStop(0, accent);
+    g.addColorStop(1, shadeColor(accent, -0.35));
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  }else if(theme.bg === "stripe"){
+    ctx.fillStyle = "#111111"; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = accent; ctx.fillRect(0, 0, W, Math.round(H*0.16));
+  }else{
+    // "gradient" (clásico oscuro con viñeta)
+    const bgGrad = ctx.createLinearGradient(0,0,W,H);
+    bgGrad.addColorStop(0, shadeColor(accent, -0.90));
+    bgGrad.addColorStop(1, shadeColor(accent, -0.65));
+    ctx.fillStyle = bgGrad; ctx.fillRect(0,0,W,H);
+    const vig = ctx.createRadialGradient(W/2, H*0.35, H*0.2, W/2, H*0.55, H*0.85);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(0,0,0,0.35)");
+    ctx.fillStyle = vig; ctx.fillRect(0,0,W,H);
+  }
+}
 
-  // sello "COMBO"
+async function drawComboHeader(ctx, W, H, cfg, theme, cursorY, pad){
+  const hasHeader = !!(cfg.storeName || cfg.logo);
+  if(!hasHeader) return cursorY;
+  const logoSize = 76;
+  let tx = pad;
+  if(cfg.logo){
+    const logoImg = await loadImg(cfg.logo);
+    if(logoImg){
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+      ctx.beginPath();
+      ctx.arc(pad+logoSize/2, cursorY+logoSize/2, logoSize/2, 0, Math.PI*2);
+      ctx.fillStyle = "#ffffff"; ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pad+logoSize/2, cursorY+logoSize/2, logoSize/2-4, 0, Math.PI*2);
+      ctx.clip();
+      drawImageCover(ctx, logoImg, pad+4, cursorY+4, logoSize-8, logoSize-8);
+      ctx.restore();
+      tx = pad+logoSize+18;
+    }
+  }
+  if(cfg.storeName){
+    ctx.fillStyle = theme.text;
+    ctx.font = "700 34px " + theme.font;
+    ctx.textBaseline = "middle";
+    ctx.fillText(truncateToWidth(ctx, cfg.storeName, W-tx-pad), tx, cursorY+logoSize/2+2);
+    ctx.textBaseline = "alphabetic";
+  }
+  return cursorY + logoSize + 20;
+}
+
+function drawComboLabel(ctx, W, H, combo, theme, cursorY){
   const comboLabel = (combo.promoLabel && combo.promoLabel.trim()) ? combo.promoLabel.trim().toUpperCase() : "COMBO";
   ctx.save();
-  ctx.font = "800 34px " + FONT_DISPLAY;
+  ctx.font = (theme.serif ? "700 " : "800 ") + "34px " + theme.font;
   const lblW = ctx.measureText(comboLabel).width;
   const boxW = lblW + 60, boxH = 58;
   const bx = W/2 - boxW/2, by = cursorY;
-  ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-  ctx.fillStyle = "#dc2626";
-  roundRect(ctx, bx, by, boxW, boxH, boxH/2);
-  ctx.fill();
+  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = theme.labelBg;
+  if(theme.ribbon){
+    ctx.fillRect(0, by+boxH*0.15, W, boxH*0.7);
+  }else{
+    roundRect(ctx, bx, by, boxW, boxH, boxH/2);
+    ctx.fill();
+  }
   ctx.shadowColor = "transparent";
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = theme.labelText;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(comboLabel, W/2, by+boxH/2+1);
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   ctx.restore();
-  cursorY += boxH + 26;
+  return cursorY + boxH + 26;
+}
 
-  // fotos en fila
+// fotos en fila (usada por: clásica, minimalista, franja, oscura, vibrante, cinta, revista, boutique)
+function drawComboPhotosRow(ctx, W, H, productsWithImg, theme, accent, photoTop, pad){
   const n = productsWithImg.length;
   const gap = 18;
-  const photoTop = cursorY;
   const photoH = Math.round(H*0.4);
   const photoW = (W - pad*2 - gap*(n-1)) / n;
   for(let i=0;i<n;i++){
@@ -4667,17 +5449,17 @@ async function drawComboCard(ctx, W, H, combo, productsWithImg, cfg){
     ctx.save();
     roundRect(ctx, px, photoTop, photoW, photoH, 18);
     ctx.clip();
-    ctx.fillStyle = "rgba(255,255,255,0.1)";
+    ctx.fillStyle = "rgba(120,120,120,0.15)";
     ctx.fillRect(px, photoTop, photoW, photoH);
     if(p.img) drawImageCover(ctx, p.img, px, photoTop, photoW, photoH);
     ctx.restore();
-    ctx.strokeStyle = "rgba(255,255,255,0.3)";
+    ctx.strokeStyle = theme.photoBorder;
     ctx.lineWidth = 2;
     roundRect(ctx, px, photoTop, photoW, photoH, 18);
     ctx.stroke();
 
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 24px " + FONT_BODY;
+    ctx.fillStyle = theme.text;
+    ctx.font = (theme.serif?"600 ":"700 ") + "24px " + theme.font;
     ctx.textAlign = "center";
     const lines = getWrappedLines(ctx, p.name, photoW-6, 2, ctx.font);
     let ny = photoTop + photoH + 32;
@@ -4687,33 +5469,181 @@ async function drawComboCard(ctx, W, H, combo, productsWithImg, cfg){
     if(i < n-1){
       ctx.save();
       ctx.fillStyle = accent;
-      ctx.font = "800 44px " + FONT_DISPLAY;
+      ctx.font = "800 44px " + theme.font;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText("+", px+photoW+gap/2, photoTop+photoH/2);
       ctx.restore();
     }
   }
+  return photoH;
+}
 
-  // precios: suma individual tachada (si conviene) + precio combo grande
-  const sumPrice = productsWithImg.reduce((s,p)=> s + (Number(p.price)||0), 0);
-  let priceY = photoTop + photoH + 108;
+// fotos con marco blanco tipo polaroid, con leve rotación alternada
+function drawComboPhotosPolaroid(ctx, W, H, productsWithImg, theme, accent, photoTop, pad){
+  const n = productsWithImg.length;
+  const gap = 26;
+  const frameW = (W - pad*2 - gap*(n-1)) / n;
+  const photoH = Math.round(frameW*0.92);
+  const frameH = photoH + Math.round(frameW*0.28);
+  for(let i=0;i<n;i++){
+    const p = productsWithImg[i];
+    const cx = pad + i*(frameW+gap) + frameW/2;
+    const cy = photoTop + frameH/2;
+    const rot = (i%2===0? -1: 1) * (2 + i) * Math.PI/180;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-frameW/2, -frameH/2, frameW, frameH);
+    ctx.shadowColor = "transparent";
+    const innerPad = Math.round(frameW*0.07);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(-frameW/2+innerPad, -frameH/2+innerPad, frameW-innerPad*2, photoH-innerPad);
+    ctx.clip();
+    ctx.fillStyle = "rgba(120,120,120,0.15)";
+    ctx.fillRect(-frameW/2+innerPad, -frameH/2+innerPad, frameW-innerPad*2, photoH-innerPad);
+    if(p.img) drawImageCover(ctx, p.img, -frameW/2+innerPad, -frameH/2+innerPad, frameW-innerPad*2, photoH-innerPad);
+    ctx.restore();
+    ctx.fillStyle = "#333333";
+    ctx.font = "600 20px " + theme.font;
+    ctx.textAlign = "center";
+    ctx.fillText(truncateToWidth(ctx, p.name, frameW-16), 0, frameH/2 - innerPad*0.9);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+  return frameH + 20;
+}
+
+// "Apilado": fotos superpuestas en abanico, como una mano de cartas
+function drawComboPhotosFan(ctx, W, H, productsWithImg, theme, accent, photoTop, pad){
+  const n = productsWithImg.length;
+  const photoH = Math.round(H*0.42);
+  const photoW = Math.round(photoH*0.82);
+  const spread = Math.min(220, (W - pad*2 - photoW) / Math.max(1,n-1));
+  const totalW = photoW + spread*(n-1);
+  const startX = (W-totalW)/2;
+  const midAngle = (n-1)/2;
+  for(let i=0;i<n;i++){
+    const p = productsWithImg[i];
+    const px = startX + i*spread;
+    const rot = (i - midAngle) * 6 * Math.PI/180;
+    ctx.save();
+    ctx.translate(px+photoW/2, photoTop+photoH/2);
+    ctx.rotate(rot);
+    ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 10;
+    ctx.save();
+    roundRect(ctx, -photoW/2, -photoH/2, photoW, photoH, 16);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.clip();
+    ctx.fillStyle = "rgba(120,120,120,0.15)";
+    ctx.fillRect(-photoW/2, -photoH/2, photoW, photoH);
+    if(p.img) drawImageCover(ctx, p.img, -photoW/2+6, -photoH/2+6, photoW-12, photoH-12);
+    ctx.restore();
+    ctx.strokeStyle = theme.photoBorder;
+    ctx.lineWidth = 3;
+    roundRect(ctx, -photoW/2, -photoH/2, photoW, photoH, 16);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // nombres debajo, en una sola línea compacta separados por " + "
+  ctx.fillStyle = theme.text;
+  ctx.font = "700 24px " + theme.font;
+  ctx.textAlign = "center";
+  const namesLine = productsWithImg.map(p=>p.name).join("  +  ");
+  const wrapped = getWrappedLines(ctx, namesLine, W-pad*2, 2, ctx.font);
+  let ny = photoTop + photoH + 40;
+  wrapped.forEach(line=>{ ctx.fillText(line, W/2, ny); ny += 30; });
+  ctx.textAlign = "left";
+  return photoH + 70;
+}
+
+// "Grid": fotos en cuadrícula 2x2 (o 1x2/2x1 según cuántas haya)
+function drawComboPhotosGrid(ctx, W, H, productsWithImg, theme, accent, photoTop, pad){
+  const n = productsWithImg.length;
+  const gap = 14;
+  const cols = n >= 3 ? 2 : n;
+  const rows = Math.ceil(n/cols);
+  const cellW = (W - pad*2 - gap*(cols-1)) / cols;
+  const cellH = Math.round(H*0.34 / rows) + (rows>1? Math.round(H*0.06):0);
+  for(let i=0;i<n;i++){
+    const p = productsWithImg[i];
+    const col = i % cols, row = Math.floor(i/cols);
+    const px = pad + col*(cellW+gap);
+    const py = photoTop + row*(cellH+gap);
+    ctx.save();
+    roundRect(ctx, px, py, cellW, cellH, 14);
+    ctx.clip();
+    ctx.fillStyle = "rgba(120,120,120,0.15)";
+    ctx.fillRect(px, py, cellW, cellH);
+    if(p.img) drawImageCover(ctx, p.img, px, py, cellW, cellH);
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(px, py+cellH-38, cellW, 38);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "600 18px " + theme.font;
+    ctx.textAlign = "center";
+    ctx.fillText(truncateToWidth(ctx, p.name, cellW-14), px+cellW/2, py+cellH-16);
+    ctx.textAlign = "left";
+    ctx.restore();
+    ctx.restore();
+    ctx.strokeStyle = theme.photoBorder;
+    ctx.lineWidth = 2;
+    roundRect(ctx, px, py, cellW, cellH, 14);
+    ctx.stroke();
+  }
+  return rows*cellH + (rows-1)*gap + 24;
+}
+
+function drawComboPrice(ctx, W, H, combo, cfg, theme, priceTopBase){
+  const sumPrice = (combo._sumPrice || 0);
+  let priceY = priceTopBase + 86;
   if(sumPrice > combo.price){
     const beforeText = `Antes: ${cfg.currency} ${formatNumber(sumPrice)}`;
-    ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = "500 30px " + FONT_BODY;
+    ctx.fillStyle = theme.muted;
+    ctx.font = "500 30px " + theme.font;
     ctx.textAlign = "center";
     ctx.fillText(beforeText, W/2, priceY);
     const tw = ctx.measureText(beforeText).width;
-    ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 2;
+    ctx.strokeStyle = theme.muted; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(W/2-tw/2, priceY-9); ctx.lineTo(W/2+tw/2, priceY-9); ctx.stroke();
     ctx.textAlign = "left";
     priceY += 54;
   }
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "800 66px " + FONT_DISPLAY;
+  ctx.fillStyle = theme.text;
+  ctx.font = (theme.serif?"700 ":"800 ") + "66px " + theme.font;
   ctx.textAlign = "center";
   ctx.fillText(`${cfg.currency} ${formatNumber(combo.price)}`, W/2, priceY+16);
   ctx.textAlign = "left";
+}
+
+async function drawComboCard(ctx, W, H, combo, productsWithImg, cfg){
+  const accent = cfg.primaryColor || "#16a34a";
+  const pad = 56;
+  const style = combo.cardStyle || "clasica";
+  const theme = getComboTheme(style, accent);
+
+  drawComboBg(ctx, W, H, theme, accent, style, productsWithImg);
+  let cursorY = await drawComboHeader(ctx, W, H, cfg, theme, pad, pad);
+  cursorY = drawComboLabel(ctx, W, H, combo, theme, cursorY);
+
+  const photoTop = cursorY;
+  let photoH;
+  if(style === "grid"){
+    photoH = drawComboPhotosGrid(ctx, W, H, productsWithImg, theme, accent, photoTop, pad);
+  }else if(style === "apilado"){
+    photoH = drawComboPhotosFan(ctx, W, H, productsWithImg, theme, accent, photoTop, pad);
+  }else if(style === "polaroid"){
+    photoH = drawComboPhotosPolaroid(ctx, W, H, productsWithImg, theme, accent, photoTop, pad);
+  }else{
+    photoH = drawComboPhotosRow(ctx, W, H, productsWithImg, theme, accent, photoTop, pad);
+  }
+
+  combo._sumPrice = productsWithImg.reduce((s,p)=> s + (Number(p.price)||0), 0);
+  drawComboPrice(ctx, W, H, combo, cfg, theme, photoTop + photoH);
 
   if(cfg.watermarkOn) drawWatermark(ctx, W, H, cfg);
 }
@@ -4725,6 +5655,7 @@ async function drawComboCard(ctx, W, H, combo, productsWithImg, cfg){
    franja compacta abajo para el nombre. Ideal en el formato "Alargada". ---- */
 async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
   const T = getCardTuning(cfg);
+  const OFF = getStyleOffsetsPx(cfg, "protagonista", W, H);
 
   // ---- fondo difuminado (queda como un marco fino, casi no se nota) ----
   if(img){
@@ -4751,6 +5682,7 @@ async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
   const photoBoxH = photoBottom - photoTop;
 
   // ---- foto del producto, lo más grande posible dentro del marco ----
+  ctx.save(); ctx.translate(OFF.photo.dx, OFF.photo.dy);
   if(img){
     const fit = fitContain(img, photoBoxW, photoBoxH);
     const dx = inset + (photoBoxW - fit.w)/2;
@@ -4764,7 +5696,7 @@ async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
     ctx.save();
     roundRect(ctx, dx, dy, fit.w, fit.h, 20);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "rgba(255,255,255,0.85)";
@@ -4773,11 +5705,13 @@ async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
     ctx.fillText("📦  Sin foto todavía", W/2, photoTop + photoBoxH/2 + 16);
     ctx.textAlign = "left";
   }
+  ctx.restore();
 
   // ---- logo pequeño, superpuesto arriba-izquierda de la foto ----
   if(cfg.logo){
     const logoImg = await loadImg(cfg.logo);
     if(logoImg){
+      ctx.save(); ctx.translate(OFF.logo.dx, OFF.logo.dy);
       const logoSize = Math.round(66 * T.logoScale);
       const lx = inset + 18, ly = photoTop + 18;
       ctx.save();
@@ -4789,10 +5723,12 @@ async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
       ctx.beginPath(); ctx.arc(lx+logoSize/2, ly+logoSize/2, logoSize/2-3, 0, Math.PI*2); ctx.clip();
       drawImageCover(ctx, logoImg, lx+3, ly+3, logoSize-6, logoSize-6);
       ctx.restore();
+      ctx.restore();
     }
   }
 
   // ---- precio, como medallón sobre la esquina de la foto ----
+  ctx.save(); ctx.translate(OFF.price.dx, OFF.price.dy);
   if(isPriceOverridden(cfg)){
     drawPriceTagGeneric(ctx, cfg, accent, product, { left: inset, top: photoTop, right: W-inset, bottom: photoBottom });
   }else{
@@ -4812,37 +5748,44 @@ async function drawCardProtagonista(ctx, W, H, product, img, cfg, accent, pad){
     ctx.fillText(priceText, boxX + 26, boxY + boxH/2 + 2);
     ctx.textBaseline = "alphabetic";
   }
+  ctx.restore();
 
   // ---- franja compacta abajo: categoría chica + nombre (máx. 2 líneas) ----
   let ty = photoBottom + Math.round(footerH*0.16);
   if(cfg.storeName){
+    ctx.save(); ctx.translate(OFF.storeName.dx, OFF.storeName.dy);
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = "700 22px " + FONT_DISPLAY;
     try{ ctx.letterSpacing = "1px"; }catch(e){}
     ctx.fillText(truncateToWidth(ctx, cfg.storeName.toUpperCase(), W-inset*2), inset+2, ty+16);
     try{ ctx.letterSpacing = "0px"; }catch(e){}
+    ctx.restore();
     ty += 34;
   }
   if(product.category){
+    ctx.save(); ctx.translate(OFF.category.dx, OFF.category.dy);
     ctx.fillStyle = accent;
     ctx.font = "700 24px " + FONT_BODY;
     ctx.fillText(product.category.toUpperCase(), inset+2, ty+18);
+    ctx.restore();
     ty += 34;
   }
-  const nameFont = `800 ${Math.round(44*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = nameFont;
   const nameMaxW = W - inset*2;
-  const nameLines = getWrappedLines(ctx, product.name, nameMaxW, 2, nameFont);
-  ctx.font = nameFont;
+  const nameFit = fitTitleFont(ctx, product.name, nameMaxW, 2, "800", Math.round(44*T.nameScale), FONT_BODY, Math.round(28*T.nameScale));
+  const nameLines = nameFit.lines;
+  ctx.save(); ctx.translate(OFF.name.dx, OFF.name.dy);
   ctx.fillStyle = "#ffffff";
+  const nameLineH = Math.round(nameFit.size*1.1364);
   nameLines.forEach((line, i) => {
-    ctx.fillText(line, inset+2, ty + Math.round(38*T.nameScale) + i*Math.round(50*T.nameScale));
+    ctx.fillText(line, inset+2, ty + Math.round(nameFit.size*0.8636) + i*nameLineH);
   });
+  ctx.restore();
 }
 
 async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
 
   const T = getCardTuning(cfg);
+  const OFF = getStyleOffsetsPx(cfg, "clasica", W, H);
   // ---- fondo de TODA la tarjeta: la misma foto del producto, ampliada y difuminada ----
   if(img){
     ctx.save();
@@ -4877,6 +5820,7 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
     if(cfg.logo){
       const logoImg = await loadImg(cfg.logo);
       if(logoImg){
+        ctx.save(); ctx.translate(OFF.logo.dx, OFF.logo.dy);
         ctx.save();
         ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4;
         ctx.beginPath();
@@ -4890,21 +5834,25 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
         ctx.clip();
         drawImageCover(ctx, logoImg, pad+4, cursorY+4, logoSize-8, logoSize-8);
         ctx.restore();
+        ctx.restore();
         tx = pad + logoSize + 22;
       }
     }
     if(cfg.storeName){
+      ctx.save(); ctx.translate(OFF.storeName.dx, OFF.storeName.dy);
       ctx.fillStyle = "#ffffff";
       ctx.font = "700 40px " + FONT_DISPLAY;
       ctx.textBaseline = "middle";
       ctx.fillText(truncateToWidth(ctx, cfg.storeName, W - tx - pad), tx, cursorY + logoSize/2 + 2);
       ctx.textBaseline = "alphabetic";
+      ctx.restore();
     }
     cursorY += logoSize + 26;
   }
 
   // ---- etiqueta de categoría (pill con borde de acento) ----
   if(product.category){
+    ctx.save(); ctx.translate(OFF.category.dx, OFF.category.dy);
     const label = product.category.toUpperCase();
     ctx.font = "700 26px " + FONT_BODY;
     try{ ctx.letterSpacing = "0.5px"; }catch(e){}
@@ -4924,54 +5872,59 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
     ctx.fillText(label, pad+padXBadge, cursorY+boxH/2+1);
     ctx.textBaseline = "alphabetic";
     try{ ctx.letterSpacing = "0px"; }catch(e){}
+    ctx.restore();
     cursorY += boxH + 22;
   }else{
     cursorY += 6;
   }
 
   // ---- nombre del producto: en blanco, última palabra en color de acento, con subrayado ----
-  const titleFont = `800 ${Math.round(60*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
   const titleMaxW = W - pad*2;
-  const titleLineHeight = Math.round(68*T.nameScale);
-  const titleLines = getWrappedLines(ctx, product.name, titleMaxW, 3, titleFont);
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, titleMaxW, 3, "800", Math.round(60*T.nameScale), FONT_BODY, Math.round(36*T.nameScale));
+  const titleLines = titleFit.lines;
+  const titleLineHeight = Math.round(titleFit.size*1.1333);
   const titleTop = cursorY;
+  ctx.save(); ctx.translate(OFF.name.dx, OFF.name.dy);
   titleLines.forEach((line, i)=>{
     const y = titleTop + i*titleLineHeight + titleLineHeight*0.78;
     drawLineWithLastWordAccent(ctx, line, pad, y, "#ffffff", accent, i === titleLines.length-1);
   });
-  const titleBottom = titleTop + titleLines.length*titleLineHeight + 6;
-
+  const titleBottom0 = titleTop + titleLines.length*titleLineHeight + 6;
   // subrayado corto bajo la primera palabra del título
   const firstWord = titleLines[0].split(" ")[0];
   const underlineW = ctx.measureText(firstWord).width;
   ctx.fillStyle = accent;
-  ctx.fillRect(pad, titleBottom - 2, Math.max(60, underlineW), 5);
+  ctx.fillRect(pad, titleBottom0 - 2, Math.max(60, underlineW), 5);
+  ctx.restore();
+  const titleBottom = titleTop + titleLines.length*titleLineHeight + 6;
 
   const photoTop = titleBottom + 30;
 
   // ---- zona reservada abajo para precio y datos de contacto ----
   const footerZone = hasContact ? 190 : 130;
   const photoBottom = H - footerZone;
-  const photoBoxH = Math.max(180, photoBottom - photoTop);
+  const photoBoxH = Math.max(120, photoBottom - photoTop);
 
-  // ---- foto real del producto (contenida, con sombra suave) ----
+  // ---- foto real del producto (llena el marco; recorte/zoom ajustables) ----
+  ctx.save(); ctx.translate(OFF.photo.dx, OFF.photo.dy);
   if(img){
     const inset = 20;
-    const fit = fitContain(img, W - pad*2 - inset*2, photoBoxH - inset*2);
-    const dx = (W - fit.w)/2, dy = photoTop + (photoBoxH - fit.h)/2;
+    const boxX = pad + inset, boxY = photoTop + inset, boxW = W - pad*2 - inset*2, boxH = photoBoxH - inset*2;
     ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0.55)"; ctx.shadowBlur = 40; ctx.shadowOffsetY = 16;
     ctx.beginPath();
-    roundRect(ctx, dx, dy, fit.w, fit.h, 16);
+    roundRect(ctx, boxX, boxY, boxW, boxH, 16);
     ctx.fillStyle = "rgba(0,0,0,0.001)";
     ctx.fill();
     ctx.restore();
     ctx.save();
-    roundRect(ctx, dx, dy, fit.w, fit.h, 16);
+    roundRect(ctx, boxX, boxY, boxW, boxH, 16);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    // ---- se muestra la foto completa (sin recortar), centrada en el marco;
+    //      solo se recorta/hace zoom si el usuario lo ajustó a mano para este producto ----
+    const fit = fitContain(img, boxW, boxH);
+    const dx = boxX + (boxW - fit.w)/2, dy = boxY + (boxH - fit.h)/2;
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "rgba(255,255,255,0.85)";
@@ -4980,8 +5933,10 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
     ctx.fillText("📦  Sin foto todavía", W/2, photoTop + photoBoxH/2 + 14);
     ctx.textAlign = "left";
   }
+  ctx.restore();
 
   // ---- medallón de precio, tipo "sticker", en la esquina inferior derecha ----
+  ctx.save(); ctx.translate(OFF.price.dx, OFF.price.dy);
   if(isPriceOverridden(cfg)){
     drawPriceTagGeneric(ctx, cfg, accent, product, { left: pad, top: photoTop, right: W-pad, bottom: photoBottom });
   }else{
@@ -5009,9 +5964,11 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
     ctx.font = `800 ${Math.round(66*T.priceScale)}px ` + FONT_DISPLAY;
     ctx.fillText(priceText, boxX + 28, boxY + Math.round(118*T.priceScale));
   }
+  ctx.restore();
 
   // ---- pie de contacto (teléfono / dirección), abajo a la izquierda ----
   if(hasContact){
+    ctx.save(); ctx.translate(OFF.contact.dx, OFF.contact.dy);
     const contactMaxW = W - pad*2 - 260;
     let ty = H - pad - 8;
     if(cfg.address){
@@ -5038,6 +5995,7 @@ async function drawCardClasica(ctx, W, H, product, img, cfg, accent, pad){
       ctx.font = `700 ${Math.round(36*T.contactScale)}px ` + FONT_DISPLAY;
       ctx.fillText(truncateToWidth(ctx, cfg.phone, contactMaxW - circleR*2 - 10), pad + circleR*2 + 16, ty - 8);
     }
+    ctx.restore();
   }
 }
 
@@ -5206,11 +6164,10 @@ async function drawCardMosaico(ctx, W, H, product, img, galleryImgs, cfg, accent
   }
 
   // ---- nombre del producto, centrado y compacto (hay poco alto disponible con varias fotos) ----
-  const titleFont = `800 ${Math.round(46*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
   const titleMaxW = W - pad*2;
-  const titleLineHeight = Math.round(52*T.nameScale);
-  const titleLines = getWrappedLines(ctx, product.name, titleMaxW, 2, titleFont);
+  const titleFit = fitTitleFont(ctx, product.name, titleMaxW, 2, "800", Math.round(46*T.nameScale), FONT_BODY, Math.round(28*T.nameScale));
+  const titleLines = titleFit.lines;
+  const titleLineHeight = Math.round(titleFit.size*1.1304);
   ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   titleLines.forEach((line,i)=>{ ctx.fillText(line, W/2, cursorY + (i+1)*titleLineHeight - titleLineHeight*0.22); });
@@ -5221,7 +6178,7 @@ async function drawCardMosaico(ctx, W, H, product, img, galleryImgs, cfg, accent
   const footerZone = hasContact ? 200 : 160;
   const stackTop = cursorY;
   const stackBottom = H - footerZone;
-  const stackH = Math.max(220, stackBottom - stackTop);
+  const stackH = Math.max(150, stackBottom - stackTop);
 
   if(allImgs.length === 0){
     ctx.fillStyle = "rgba(255,255,255,0.85)";
@@ -5342,7 +6299,7 @@ async function drawCardMinimal(ctx, W, H, product, img, cfg, accent, pad){
     ctx.save();
     roundRect(ctx, dx, dy, fit.w, fit.h, 14);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "#9aa3b2";
@@ -5353,11 +6310,10 @@ async function drawCardMinimal(ctx, W, H, product, img, cfg, accent, pad){
   }
 
   let ny = cursorY + photoBoxH + 46;
-  const titleFont = `800 ${Math.round(52*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, W - pad*2, 2, "800", Math.round(52*T.nameScale), FONT_BODY, Math.round(32*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = "#111417";
-  const titleLines = getWrappedLines(ctx, product.name, W - pad*2, 2, titleFont);
-  const nameLineH = Math.round(58*T.nameScale);
+  const nameLineH = Math.round(titleFit.size*1.1154);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, pad, ny + i*nameLineH); });
   ny += titleLines.length*nameLineH + 10;
 
@@ -5440,12 +6396,11 @@ async function drawCardFranja(ctx, W, H, product, img, cfg, accent, pad){
   const rightX = bandW + 40;
   const rightW = W - bandW - 40 - pad;
 
-  const titleFont = `800 ${Math.round(54*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, rightW, 3, "800", Math.round(54*T.nameScale), FONT_BODY, Math.round(32*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = "#ffffff";
-  const titleLines = getWrappedLines(ctx, product.name, rightW, 3, titleFont);
   let ty = pad + 50;
-  const franjaLineH = Math.round(60*T.nameScale);
+  const franjaLineH = Math.round(titleFit.size*1.1111);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, rightX, ty + i*franjaLineH); });
   const titleBottom = ty + titleLines.length*franjaLineH + 20;
 
@@ -5460,7 +6415,7 @@ async function drawCardFranja(ctx, W, H, product, img, cfg, accent, pad){
     ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
     roundRect(ctx, dx, dy, fit.w, fit.h, 16);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "rgba(255,255,255,0.7)";
@@ -5545,19 +6500,18 @@ async function drawCardOscura(ctx, W, H, product, img, cfg, accent, pad){
     cursorY += 40;
   }
 
-  const titleFont = `500 ${Math.round(50*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, W - pad*2.4, 2, "500", Math.round(50*T.nameScale), FONT_BODY, Math.round(30*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
-  const titleLines = getWrappedLines(ctx, product.name, W - pad*2.4, 2, titleFont);
-  const oscuraLineH = Math.round(56*T.nameScale);
+  const oscuraLineH = Math.round(titleFit.size*1.12);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, W/2, cursorY + 44 + i*oscuraLineH); });
   ctx.textAlign = "left";
   const titleBottom = cursorY + titleLines.length*oscuraLineH + 26;
 
   const footerZone = hasContact ? 170 : 120;
   const photoTop = titleBottom;
-  const photoBoxH = Math.max(180, H - footerZone - photoTop);
+  const photoBoxH = Math.max(120, H - footerZone - photoTop);
 
   if(img){
     const inset = 30;
@@ -5568,7 +6522,7 @@ async function drawCardOscura(ctx, W, H, product, img, cfg, accent, pad){
     roundRect(ctx, dx, dy, fit.w, fit.h, 10);
     ctx.strokeStyle = rgba(accent,0.5); ctx.lineWidth = 2; ctx.stroke();
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "rgba(255,255,255,0.6)";
@@ -5653,17 +6607,16 @@ async function drawCardVibrante(ctx, W, H, product, img, cfg, accent, pad){
     cursorY += boxH + 24;
   }
 
-  const titleFont = `800 ${Math.round(62*T.nameScale)}px ` + FONT_DISPLAY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, W-pad*2, 3, "800", Math.round(62*T.nameScale), FONT_DISPLAY, Math.round(38*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = "#ffffff";
-  const titleLines = getWrappedLines(ctx, product.name, W-pad*2, 3, titleFont);
-  const vibLineH = Math.round(68*T.nameScale);
+  const vibLineH = Math.round(titleFit.size*1.0968);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, pad, cursorY+50+i*vibLineH); });
   const titleBottom = cursorY + titleLines.length*vibLineH + 20;
 
   const footerZone = hasContact ? 200 : 160;
   const photoTop = titleBottom + 20;
-  const photoBoxH = Math.max(180, H - footerZone - photoTop);
+  const photoBoxH = Math.max(120, H - footerZone - photoTop);
 
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.3)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
@@ -5679,7 +6632,7 @@ async function drawCardVibrante(ctx, W, H, product, img, cfg, accent, pad){
     ctx.save();
     roundRect(ctx, dx, dy, fit.w, fit.h, 16);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = shadeColor(accent, 0.3);
@@ -5749,7 +6702,7 @@ async function drawCardPolaroid(ctx, W, H, product, img, cfg, accent, pad){
   if(img){
     const fit = fitContain(img, frameW - innerPad*2, photoH);
     const dx = frameX + innerPad + ((frameW-innerPad*2)-fit.w)/2, dy = frameTop + innerPad + (photoH-fit.h)/2;
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
   }else{
     ctx.fillStyle = "#c9cdd4";
     ctx.fillRect(frameX+innerPad, frameTop+innerPad, frameW-innerPad*2, photoH);
@@ -5762,12 +6715,11 @@ async function drawCardPolaroid(ctx, W, H, product, img, cfg, accent, pad){
 
   // ---- "anotación" manuscrita: nombre del producto y precio, como si estuvieran escritos a mano ----
   const noteTop = frameTop + innerPad + photoH + 20;
-  const titleFont = `600 ${Math.round(46*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, frameW - innerPad*2, 2, "600", Math.round(46*T.nameScale), FONT_BODY, Math.round(28*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = "#1c2233";
   ctx.textAlign = "center";
-  const titleLines = getWrappedLines(ctx, product.name, frameW - innerPad*2, 2, titleFont);
-  const polaroidLineH = Math.round(50*T.nameScale);
+  const polaroidLineH = Math.round(titleFit.size*1.087);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, W/2, noteTop + 38 + i*polaroidLineH); });
 
   if(isPriceOverridden(cfg)){
@@ -5819,7 +6771,7 @@ async function drawCardCinta(ctx, W, H, product, img, cfg, accent, pad){
   const T = getCardTuning(cfg);
   // fondo: la foto real, nítida, a pantalla completa
   if(img){
-    drawImageCover(ctx, img, 0, 0, W, H);
+    drawImageWithFocus(ctx, img, 0, 0, W, H, getPhotoFocus(product, cfg));
     // degradado sutil abajo para que el logo/contacto se lean bien sobre la foto
     const g = ctx.createLinearGradient(0, H*0.72, 0, H);
     g.addColorStop(0, "rgba(10,10,10,0)");
@@ -5836,10 +6788,10 @@ async function drawCardCinta(ctx, W, H, product, img, cfg, accent, pad){
 
   const bannerH = 108, bannerTop = pad - 8;
   const title = product.name.toUpperCase();
-  const cintaTitleFont = `800 ${Math.round(42*T.nameScale)}px ` + FONT_BODY;
-  ctx.font = cintaTitleFont;
   const titleMaxW = W * 0.62;
-  const titleLines = getWrappedLines(ctx, title, titleMaxW - 90, 2, cintaTitleFont);
+  const titleFit = fitTitleFont(ctx, title, titleMaxW - 90, 2, "800", Math.round(42*T.nameScale), FONT_BODY, Math.round(26*T.nameScale));
+  const titleLines = titleFit.lines;
+  const cintaTitleFont = titleFit.font;
   const bannerActualH = titleLines.length > 1 ? bannerH + 46 : bannerH;
 
   // ---- cinta blanca principal con nombre del producto ----
@@ -5880,7 +6832,7 @@ async function drawCardCinta(ctx, W, H, product, img, cfg, accent, pad){
   ctx.font = cintaTitleFont;
   try{ ctx.letterSpacing = "0px"; }catch(e){}
   const textX = pad + checkR*2 + 18;
-  const lineH = Math.round(48*T.nameScale);
+  const lineH = Math.round(titleFit.size*1.1429);
   const blockH = titleLines.length * lineH;
   let ty = bannerTop + bannerActualH/2 - blockH/2 + lineH*0.74;
   titleLines.forEach(line=>{
@@ -6022,7 +6974,7 @@ async function drawCardRevista(ctx, W, H, product, img, cfg, accent, pad){
   const T = getCardTuning(cfg);
 
   if(img){
-    drawImageCover(ctx, img, 0, 0, W, H);
+    drawImageWithFocus(ctx, img, 0, 0, W, H, getPhotoFocus(product, cfg));
   }else{
     const bgGrad = ctx.createLinearGradient(0,0,W,H);
     bgGrad.addColorStop(0, shadeColor(accent, -0.8));
@@ -6134,10 +7086,9 @@ async function drawCardRevista(ctx, W, H, product, img, cfg, accent, pad){
   ctx.fillRect(pad, cursorBottom, 70, 5);
   cursorBottom -= 22;
 
-  const titleFont = `800 ${Math.round(56*T.nameScale)}px ` + FONT_DISPLAY;
-  ctx.font = titleFont;
-  const titleLines = getWrappedLines(ctx, product.name, W-pad*2, 3, titleFont);
-  const lineH = Math.round(62*T.nameScale);
+  const titleFit = fitTitleFont(ctx, product.name, W-pad*2, 3, "800", Math.round(56*T.nameScale), FONT_DISPLAY, Math.round(34*T.nameScale));
+  const titleLines = titleFit.lines;
+  const lineH = Math.round(titleFit.size*1.1071);
   const titleTop = cursorBottom - titleLines.length*lineH;
   ctx.fillStyle = "#ffffff";
   titleLines.forEach((line,i)=>{ ctx.fillText(line, pad, titleTop + i*lineH + lineH*0.8); });
@@ -6206,7 +7157,7 @@ async function drawCardBoutique(ctx, W, H, product, img, cfg, accent, pad){
   // ---- foto con marco doble ----
   const footerH = 190;
   const photoTop = cursorY;
-  const photoBoxH = Math.max(160, H - footerH - photoTop);
+  const photoBoxH = Math.max(130, H - footerH - photoTop);
   const photoBoxW = W - innerPad*2;
 
   ctx.save();
@@ -6228,7 +7179,7 @@ async function drawCardBoutique(ctx, W, H, product, img, cfg, accent, pad){
     ctx.save();
     roundRect(ctx, dx, dy, fit.w, fit.h, 4);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, fit.w, fit.h);
+    drawImageWithFocus(ctx, img, dx, dy, fit.w, fit.h, getPhotoFocus(product, cfg));
     ctx.restore();
   }else{
     ctx.fillStyle = "rgba(42,36,32,0.4)";
@@ -6251,12 +7202,11 @@ async function drawCardBoutique(ctx, W, H, product, img, cfg, accent, pad){
     fy += 34;
   }
 
-  const titleFont = `700 ${Math.round(46*T.nameScale)}px ` + FONT_DISPLAY;
-  ctx.font = titleFont;
+  const titleFit = fitTitleFont(ctx, product.name, photoBoxW, 2, "700", Math.round(46*T.nameScale), FONT_DISPLAY, Math.round(28*T.nameScale));
+  const titleLines = titleFit.lines;
   ctx.fillStyle = ink;
   ctx.textAlign = "center";
-  const titleLines = getWrappedLines(ctx, product.name, photoBoxW, 2, titleFont);
-  const lineH = Math.round(50*T.nameScale);
+  const lineH = Math.round(titleFit.size*1.087);
   titleLines.forEach((line,i)=>{ ctx.fillText(line, W/2, fy + 34 + i*lineH); });
   ctx.textAlign = "left";
   fy += titleLines.length*lineH + 24;
@@ -6415,6 +7365,10 @@ async function renderCoverPageCanvas(){
     }
   }else if((cfg.coverStyle || "oscuro") === "oscuro"){
     await drawCoverDark(ctx, W, H, cfg, accent);
+  }else if(cfg.coverStyle === "foto"){
+    await drawCoverFoto(ctx, W, H, cfg, accent);
+  }else if(cfg.coverStyle === "minimalista"){
+    await drawCoverMinimal(ctx, W, H, cfg, accent);
   }else{
     await drawCoverLight(ctx, W, H, cfg, accent);
   }
@@ -6822,6 +7776,252 @@ async function drawCoverLight(ctx, W, H, cfg, accent){
   ctx.fillText(`${availableCount} productos disponibles · generado el ${new Date().toLocaleDateString("es-ES")}`, 90, H - 70);
 }
 
+/* ---- Estilo FOTO: portada con una foto real de producto de fondo (difuminada
+   y oscurecida), tipo portada de revista. Si no hay ninguna foto cargada
+   todavía, usa un degradado de color como las demás portadas. ---- */
+async function drawCoverFoto(ctx, W, H, cfg, accent){
+  let bgImg = null;
+  const chosenId = cfg.coverPhotoProductId;
+  const photoProduct = (chosenId && state.products.find(p => p.id === chosenId && p.hasPhoto))
+    || state.products.find(p => p.hasPhoto);
+  if(photoProduct){
+    try{
+      const url = await getPhotoUrl(photoProduct.id);
+      if(url) bgImg = await loadImg(url);
+    }catch(e){ bgImg = null; }
+  }
+  if(bgImg){
+    ctx.save();
+    try{ ctx.filter = "blur(4px) brightness(0.85)"; }catch(e){}
+    drawImageCover(ctx, bgImg, -20, -20, W+40, H+40);
+    ctx.filter = "none";
+    ctx.restore();
+  }else{
+    const bg = ctx.createLinearGradient(0,0,W,H);
+    bg.addColorStop(0, shadeColor(accent, -0.78));
+    bg.addColorStop(1, shadeColor(accent, -0.48));
+    ctx.fillStyle = bg;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // degradado inferior oscuro para que el bloque de texto se lea bien
+  const scrim = ctx.createLinearGradient(0, H*0.32, 0, H);
+  scrim.addColorStop(0, "rgba(6,6,10,0)");
+  scrim.addColorStop(1, "rgba(6,6,10,0.94)");
+  ctx.fillStyle = scrim;
+  ctx.fillRect(0, H*0.32, W, H*0.68);
+
+  // leve degradado superior para que el logo se lea sobre la foto
+  const topScrim = ctx.createLinearGradient(0,0,0,260);
+  topScrim.addColorStop(0, "rgba(0,0,0,0.55)");
+  topScrim.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = topScrim;
+  ctx.fillRect(0,0,W,260);
+
+  // marco fino, tipo portada de revista
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(28, 28, W-56, H-56);
+  ctx.restore();
+
+  // ---- encabezado: logo + nombre de la tienda ----
+  const logoSize = 96;
+  let tx = 90;
+  const hy = 90;
+  let logoImg = null;
+  if(cfg.logo){ try{ logoImg = await loadImg(cfg.logo); }catch(e){ logoImg = null; } }
+  if(logoImg){
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(90+logoSize/2, hy+logoSize/2, logoSize/2, 0, Math.PI*2);
+    ctx.fillStyle = "#ffffff"; ctx.fill();
+    ctx.clip();
+    drawImageCover(ctx, logoImg, 90+4, hy+4, logoSize-8, logoSize-8);
+    ctx.restore();
+    tx = 90 + logoSize + 24;
+  }
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 40px " + FONT_DISPLAY;
+  ctx.textBaseline = "middle";
+  ctx.fillText(truncateToWidth(ctx, cfg.storeName || "Catálogo", W - tx - 90), tx, hy + logoSize/2 + 1);
+  ctx.textBaseline = "alphabetic";
+
+  // ---- bloque inferior: contacto, aviso/garantía, tagline, título ----
+  let cursorBottom = H - 70;
+
+  const availableCount = state.products.filter(p => p.available !== false && !isOutOfStock(p)).length;
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "500 26px " + FONT_DISPLAY;
+  ctx.fillText(`${availableCount} productos disponibles · generado el ${new Date().toLocaleDateString("es-ES")}`, 90, cursorBottom);
+  cursorBottom -= 56;
+
+  const infoItems = [
+    cfg.phone ? "📞 " + cfg.phone : "",
+    cfg.address ? "📍 " + cfg.address : "",
+    cfg.email ? "✉️ " + cfg.email : ""
+  ].filter(Boolean);
+  if(infoItems.length){
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.font = "600 32px " + FONT_DISPLAY;
+    infoItems.slice().reverse().forEach(line=>{
+      ctx.fillText(truncateToWidth(ctx, line, W-180), 90, cursorBottom);
+      cursorBottom -= 46;
+    });
+    cursorBottom -= 14;
+  }
+
+  if(cfg.warrantyText){
+    const amber = "#f0b955";
+    const noteW = W - 180;
+    const bodyFont = "600 28px " + FONT_DISPLAY;
+    ctx.font = bodyFont;
+    const wLines = getWrappedLines(ctx, "⚠️ Garantía: " + cfg.warrantyText, noteW, 3, bodyFont);
+    ctx.fillStyle = amber;
+    wLines.slice().reverse().forEach((line,i)=>{
+      ctx.fillText(line, 90, cursorBottom - i*38);
+    });
+    cursorBottom -= wLines.length*38 + 20;
+  }
+
+  if(cfg.tagline){
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    const tagFont = "600 32px " + FONT_DISPLAY;
+    ctx.font = tagFont;
+    ctx.fillText(truncateToWidth(ctx, cfg.tagline, W-180), 90, cursorBottom);
+    cursorBottom -= 54;
+  }
+
+  ctx.fillStyle = accent;
+  ctx.fillRect(90, cursorBottom, 76, 6);
+  cursorBottom -= 24;
+
+  const titleFont = "800 84px " + FONT_DISPLAY;
+  ctx.font = titleFont;
+  const titleLines = getWrappedLines(ctx, "CATÁLOGO DE PRODUCTOS", W-180, 2, titleFont);
+  const lineH = 90;
+  const titleTop = cursorBottom - titleLines.length*lineH;
+  ctx.fillStyle = "#ffffff";
+  titleLines.forEach((line,i)=>{ ctx.fillText(line, 90, titleTop + i*lineH + lineH*0.78); });
+}
+
+/* ---- Estilo MINIMALISTA: fondo claro casi vacío, todo centrado, mucho aire
+   alrededor — pensado para catálogos formales / de línea premium. ---- */
+async function drawCoverMinimal(ctx, W, H, cfg, accent){
+  ctx.fillStyle = "#fafaf9";
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = accent;
+  ctx.fillRect(0, 0, W, 10);
+
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  const cx = W/2;
+
+  // logo / inicial, en círculo blanco con borde fino
+  const logoSize = 210, cy = 300;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.10)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 10;
+  ctx.beginPath(); ctx.arc(cx, cy, logoSize/2, 0, Math.PI*2);
+  ctx.fillStyle = "#ffffff"; ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, logoSize/2, 0, Math.PI*2); ctx.stroke();
+
+  let logoImg = null;
+  if(cfg.logo){ try{ logoImg = await loadImg(cfg.logo); }catch(e){ logoImg = null; } }
+  if(logoImg){
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, logoSize/2-10, 0, Math.PI*2); ctx.clip();
+    drawImageCover(ctx, logoImg, cx-logoSize/2+10, cy-logoSize/2+10, logoSize-20, logoSize-20);
+    ctx.restore();
+  }else{
+    ctx.fillStyle = accent;
+    ctx.font = "700 96px " + FONT_DISPLAY;
+    ctx.textBaseline = "middle";
+    ctx.fillText(((cfg.storeName||"?").trim().charAt(0) || "?").toUpperCase(), cx, cy+6);
+    ctx.textBaseline = "alphabetic";
+  }
+
+  let ny = cy + logoSize/2 + 90;
+  ctx.fillStyle = "#15181c";
+  const nameFont = "700 62px " + FONT_DISPLAY;
+  const nameLines = getWrappedLines(ctx, cfg.storeName || "Catálogo", W-260, 2, nameFont);
+  ctx.font = nameFont;
+  nameLines.forEach(line=>{ ctx.fillText(line, cx, ny); ny += 68; });
+
+  ny += 4;
+  ctx.strokeStyle = rgba(accent, 0.6);
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx-56, ny); ctx.lineTo(cx+56, ny); ctx.stroke();
+  ny += 46;
+
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "600 26px " + FONT_DISPLAY;
+  try{ ctx.letterSpacing = "4px"; }catch(e){}
+  ctx.fillText("CATÁLOGO DE PRODUCTOS", cx, ny);
+  try{ ctx.letterSpacing = "0px"; }catch(e){}
+  ny += 60;
+
+  if(cfg.tagline){
+    ctx.fillStyle = "#3f4650";
+    const tagFont = "500 30px " + FONT_DISPLAY;
+    ctx.font = tagFont;
+    const tagLines = getWrappedLines(ctx, cfg.tagline, W-320, 2, tagFont);
+    tagLines.forEach(line=>{ ctx.fillText(line, cx, ny); ny += 40; });
+    ny += 30;
+  }
+
+  // ---- contacto, en lista centrada y espaciada ----
+  const infoItems = [
+    cfg.ownerName ? "👤  " + cfg.ownerName : "",
+    cfg.phone ? "📞  " + cfg.phone : "",
+    cfg.email ? "✉️  " + cfg.email : "",
+    cfg.address ? "📍  " + cfg.address : ""
+  ].filter(Boolean);
+  ctx.font = "500 32px " + FONT_DISPLAY;
+  ctx.fillStyle = "#2b2f36";
+  infoItems.forEach(line=>{
+    ctx.fillText(truncateToWidth(ctx, line, W-260), cx, ny);
+    ny += 50;
+  });
+  ny += 20;
+
+  if(cfg.extraInfo){
+    const noteW = W - 240;
+    const noteFont = "500 28px " + FONT_DISPLAY;
+    ctx.font = noteFont;
+    const noteLines = getWrappedLines(ctx, cfg.extraInfo, noteW - 60, 3, noteFont);
+    const noteH = 40 + noteLines.length*38 + 20;
+    ctx.save();
+    ctx.strokeStyle = "#e2e2e0";
+    ctx.lineWidth = 2;
+    roundRect(ctx, cx-noteW/2, ny, noteW, noteH, 16);
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#4b4b48";
+    noteLines.forEach((line,i)=>{ ctx.fillText(line, cx, ny + 40 + i*38); });
+    ny += noteH + 24;
+  }
+
+  if(cfg.warrantyText){
+    const amber = "#b8720e";
+    const noteW = W - 240;
+    const bodyFont = "500 28px " + FONT_DISPLAY;
+    ctx.font = bodyFont;
+    const wLines = getWrappedLines(ctx, "Garantía: " + cfg.warrantyText, noteW - 60, 3, bodyFont);
+    ctx.fillStyle = amber;
+    wLines.forEach((line,i)=>{ ctx.fillText(line, cx, ny + i*38); });
+    ny += wLines.length*38 + 20;
+  }
+
+  // ---- pie de página ----
+  const availableCount = state.products.filter(p => p.available !== false && !isOutOfStock(p)).length;
+  ctx.fillStyle = "#a3a3a0";
+  ctx.font = "500 26px " + FONT_DISPLAY;
+  ctx.fillText(`${availableCount} productos disponibles · generado el ${new Date().toLocaleDateString("es-ES")}`, cx, H-70);
+  ctx.textAlign = "left";
+}
+
 /* ============================================================
    MODAL TARJETA / COMPARTIR
    ============================================================ */
@@ -6943,70 +8143,54 @@ async function nativeSaveOrShare(blob, filename, opts){
   try{
     const plugins = window.Capacitor.Plugins || {};
     const Filesystem = plugins.Filesystem;
+    const Share = plugins.Share;
     if(!Filesystem) return false;
     const base64 = await blobToBase64(blob);
     const folder = opts.folder || "Otros";
     const relPath = `CatalogoWhatsApp/${folder}/${filename}`;
 
+    // Guardamos en la carpeta privada de la app dentro del almacenamiento
+    // del celular ("External"). A diferencia de "EXTERNAL_STORAGE" y
+    // "Documents" (que fallan en silencio desde Android 10/11 por las
+    // restricciones de Google), esta SÍ funciona sin pedir permisos en
+    // cualquier versión de Android.
     let written = null;
-    let savedLocationLabel = "";
-
-    // 1) Se intenta primero guardar dentro de la carpeta pública de
-    //    Descargas del celular, que es la más fácil de encontrar con
-    //    cualquier gestor de archivos.
     try{
-      if(Filesystem.requestPermissions){
-        try{ await Filesystem.requestPermissions(); }catch(permErr){}
-      }
       written = await Filesystem.writeFile({
-        path: `Download/${relPath}`,
+        path: relPath,
         data: base64,
-        directory: "EXTERNAL_STORAGE",
+        directory: "EXTERNAL",
         recursive: true
       });
-      savedLocationLabel = `Descargas/CatalogoWhatsApp/${folder}`;
     }catch(extErr){
-      written = null;
-    }
-
-    // 2) Si el celular no lo permitió (versiones de Android más
-    //    restrictivas), se usa la carpeta privada de documentos de la
-    //    app, que siempre funciona sin pedir permisos.
-    if(!written){
+      // Último recurso si algo raro pasa con el almacenamiento del celular.
       try{
-        written = await Filesystem.writeFile({
-          path: relPath,
-          data: base64,
-          directory: "DOCUMENTS",
-          recursive: true
-        });
-        savedLocationLabel = `Documentos de la app/CatalogoWhatsApp/${folder}`;
-      }catch(docErr){
+        written = await Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" });
+      }catch(cacheErr){
         written = null;
       }
     }
 
-    // 3) Último recurso: guardar solo temporalmente para poder compartirlo
-    //    ahora mismo (no queda una copia permanente).
     if(!written){
-      written = await Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" });
-      savedLocationLabel = "";
+      return false; // no se pudo guardar nada: seguimos con el método del navegador
     }
 
-    const Share = plugins.Share;
-    if(Share && written && written.uri){
+    // Paso clave: abrir el selector nativo de Android para que el usuario
+    // guarde la imagen en su Galería/Archivos o la envíe directo por
+    // WhatsApp. Sin este paso el archivo queda guardado pero invisible
+    // para el usuario, que es justo el problema que había antes.
+    if(Share && written.uri){
       try{
-        await Share.share({ title: opts.title || filename, url: written.uri, dialogTitle: opts.title || "Compartir / Guardar" });
+        await Share.share({ title: opts.title || filename, url: written.uri, dialogTitle: opts.title || "Guardar o compartir" });
+        toast((opts.savedMessage || "Listo") + ". Elige dónde guardarla o a quién enviarla.");
         return true;
       }catch(shareErr){
-        // El usuario cerró el selector de apps: si quedó en un lugar permanente, igual está guardado.
+        // El usuario cerró el selector sin elegir nada. El archivo igual
+        // quedó guardado dentro de la app, así que avisamos con honestidad
+        // (ya no decimos "Guardado" a secas si el usuario no llegó a elegir dónde).
       }
     }
-    if(savedLocationLabel){
-      toast((opts.savedMessage || "Guardado") + " en " + savedLocationLabel);
-    }else{
-      toast((opts.savedMessage || "Archivo guardado") + ": " + filename);
-    }
+    toast("La imagen quedó lista dentro de la app. Toca compartir de nuevo para enviarla o guardarla en tu galería.");
     return true;
   }catch(err){
     console.error("nativeSaveOrShare falló:", err);
@@ -7592,6 +8776,7 @@ qs("#btnPreviewCover").addEventListener("click", async ()=>{
     tagline: qs("#cfgTagline").value.trim(),
     warrantyText: qs("#cfgWarrantyText").value.trim(),
     coverStyle: qs("#cfgCoverStyle").value,
+    coverPhotoProductId: qs("#cfgCoverPhotoProduct").value || "",
     primaryColor: qs("#cfgColor").value,
     fontStyle: qs("#cfgFontStyle").value
   });
@@ -7725,6 +8910,21 @@ qs("#cfgColorMode").addEventListener("change", ()=>{
   updateTuningPreview();
 });
 
+function populateCoverPhotoSelect(){
+  const sel = qs("#cfgCoverPhotoProduct");
+  if(!sel) return;
+  const current = state.config.coverPhotoProductId || "";
+  sel.innerHTML = '<option value="">Automático (la primera foto cargada)</option>';
+  state.products.filter(p => p.hasPhoto).forEach(p=>{
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name || "(sin nombre)";
+    sel.appendChild(opt);
+  });
+  // si el producto elegido ya no existe o perdió la foto, se vuelve a "automático"
+  sel.value = [...sel.options].some(o=>o.value===current) ? current : "";
+}
+
 function loadConfigForm(){
   qs("#cfgStoreName").value = state.config.storeName || "";
   qs("#cfgAddress").value = state.config.address || "";
@@ -7736,7 +8936,23 @@ function loadConfigForm(){
   qs("#cfgWarrantyText").value = state.config.warrantyText || "";
   qs("#cfgExtraInfo").value = state.config.extraInfo || "";
   qs("#cfgCoverStyle").value = state.config.coverStyle || "oscuro";
-  qs("#cfgCurrency").value = state.config.currency || "$";
+  populateCoverPhotoSelect();
+  {
+    const curVal = state.config.currency || "USD";
+    const presets = ["USD","CUP","EUR","$"];
+    if (presets.includes(curVal)) {
+      qs("#cfgCurrency").value = curVal;
+      qs("#cfgCurrencyCustom").style.display = "none";
+      qs("#cfgCurrencyCustom").value = "";
+    } else {
+      qs("#cfgCurrency").value = "otro";
+      qs("#cfgCurrencyCustom").style.display = "";
+      qs("#cfgCurrencyCustom").value = curVal;
+    }
+    qs("#cfgExchangeRate").value = state.config.exchangeRate || "";
+    qs("#cfgSecondaryCurrency").value = state.config.secondaryCurrency || "";
+    updateRateFromLabel();
+  }
   qs("#cfgColor").value = state.config.primaryColor || "#16a34a";
   cfgExtraColorsDraft = Array.isArray(state.config.extraColors) ? state.config.extraColors.slice() : [];
   cfgCategoryColorsDraft = Object.assign({}, state.config.categoryColors || {});
@@ -7766,6 +8982,8 @@ function loadConfigForm(){
   qs("#cfgLowStockEnabled").checked = tuning.lowStockEnabled;
   qs("#cfgLowStockThreshold").value = String(tuning.lowStockThreshold);
   qs("#cfgLowStockPos").value = tuning.lowStockPos;
+  qs("#cfgOfertaPos").value = tuning.ofertaPos;
+  loadClasicaOffsetsDraft();
   qs("#cfgIncludeOOS").checked = !!state.config.includeOutOfStock;
   qs("#cfgGroupByCategory").checked = !!state.config.groupByCategory;
   qs("#cfgPdfGridDensity").value = String(state.config.pdfGridDensity || 6);
@@ -7802,6 +9020,31 @@ function loadConfigForm(){
   }
   updateHeaderPreview();
   updateTuningPreview();
+  qs("#webWhatsapp").value = state.config.webWhatsapp || "";
+  qs("#webFirebaseDbUrl").value = state.config.webFirebaseDbUrl || "";
+  qs("#webFirebaseApiKey").value = state.config.webFirebaseApiKey || "";
+  qs("#webFirebaseEmail").value = state.config.webFirebaseEmail || "";
+  qs("#webFirebasePassword").value = state.config.webFirebasePassword || "";
+  qs("#webImgbbKey").value = state.config.webImgbbKey || "";
+  qs("#webPhotoQuality").value = state.config.webPhotoQuality || "original";
+  qs("#webColorPrimario").value = state.config.webColorPrimario || "#0F4C3A";
+  qs("#webColorAcento").value = state.config.webColorAcento || "#F0662B";
+  qs("#webHoraApertura").value = state.config.webHoraApertura || "";
+  qs("#webHoraCierre").value = state.config.webHoraCierre || "";
+  qs("#webDescription").value = state.config.webDescription || "";
+  qs("#webAddress").value = state.config.webAddress || "";
+  qs("#webDeliveryText").value = state.config.webDeliveryText || "";
+  qs("#webFacebookUrl").value = state.config.webFacebookUrl || "";
+  qs("#webInstagramUrl").value = state.config.webInstagramUrl || "";
+  qs("#webDescuentoEfectivo").value = state.config.webDescuentoEfectivo || "";
+  qs("#webSecondaryCurrency").value = state.config.webSecondaryCurrency || "";
+  qs("#webExchangeRate").value = state.config.webExchangeRate || "";
+  updateWebRateLabel();
+  qs("#webBannerEnabled").checked = !!state.config.webBannerEnabled;
+  qs("#webBannerText").value = state.config.webBannerText || "";
+  qs("#webMensajePedido").value = state.config.webMensajePedido || "";
+  qs("#webInfoPago").value = state.config.webInfoPago || "";
+  qs("#webSyncEnabled").checked = !!state.config.webSyncEnabled;
 }
 function updateHeaderPreview(){
   qs("#cfgHeaderPreviewName").textContent = qs("#cfgStoreName").value.trim() || "Mi Tienda";
@@ -7892,6 +9135,136 @@ qs("#btnClearCustomCover").addEventListener("click", ()=>{
 });
 
 let tuningPreviewProduct = null;
+// ---- Posiciones de elementos para el estilo Clásica difuminada, movidas con
+// el dedo (aplican globalmente a TODAS las tarjetas de ese estilo, vía
+// cfg.customLayoutByStyle.clasica) ----
+let clasicaOffsetsDraft = {};
+function loadClasicaOffsetsDraft(){
+  const raw = (state.config.customLayoutByStyle && state.config.customLayoutByStyle.clasica) || {};
+  clasicaOffsetsDraft = {};
+  STYLE_LAYOUT_ELS.forEach(k=>{
+    clasicaOffsetsDraft[k] = { fx: (raw[k] && raw[k].fx) || 0, fy: (raw[k] && raw[k].fy) || 0 };
+  });
+}
+
+// ===================== EDITOR DE POSICIONES - TARJETA CLÁSICA (arrastrar con el dedo) =====================
+const CLASICA_OFFSET_LIMIT = 0.30; // qué tan lejos del lugar original se puede arrastrar cada elemento
+function clasicaClamp(v){ return Math.max(-CLASICA_OFFSET_LIMIT, Math.min(CLASICA_OFFSET_LIMIT, v)); }
+
+function positionClasicaHandles(){
+  const anchors = getStyleHandleAnchors("clasica");
+  qsa("#clasicaEditorStage .libre-handle").forEach(h=>{
+    const el = h.dataset.el;
+    const anchor = anchors[el] || { x:0.5, y:0.5 };
+    const off = clasicaOffsetsDraft[el] || { fx:0, fy:0 };
+    const x = Math.max(0.02, Math.min(0.98, anchor.x + off.fx));
+    const y = Math.max(0.02, Math.min(0.98, anchor.y + off.fy));
+    h.style.left = (x*100) + "%";
+    h.style.top = (y*100) + "%";
+  });
+}
+
+let clasicaRenderPending = false;
+function scheduleClasicaRender(){
+  if(clasicaRenderPending) return;
+  clasicaRenderPending = true;
+  requestAnimationFrame(async ()=>{
+    clasicaRenderPending = false;
+    await renderClasicaEditorPreview();
+    updateTuningPreview();
+  });
+}
+
+async function renderClasicaEditorPreview(){
+  const canvas = qs("#clasicaEditorCanvas");
+  if(!canvas) return;
+  if(!tuningPreviewProduct){
+    tuningPreviewProduct = state.products.find(p=>p.hasPhoto) || state.products[0] || null;
+  }
+  const demoProduct = tuningPreviewProduct || {
+    id: "__demo__", name: "Producto de ejemplo con nombre largo", price: 199, oldPrice: 249, category: "Categoría",
+    hasPhoto: false, available: true, qty: 5
+  };
+  const previewProduct = Object.assign({}, demoProduct, {
+    oldPrice: demoProduct.oldPrice || Math.round((Number(demoProduct.price)||199) * 1.25)
+  });
+  const tempCfg = Object.assign({}, state.config, {
+    cardStyle: "clasica",
+    customLayoutByStyle: Object.assign({}, state.config.customLayoutByStyle, { clasica: clasicaOffsetsDraft })
+  });
+  const realConfig = state.config;
+  state.config = tempCfg;
+  try{
+    await renderCardToCanvas(canvas, previewProduct);
+  }catch(e){
+    console.error("Error en vista previa de la Clásica", e);
+  }
+  state.config = realConfig;
+}
+
+function openClasicaEditor(){
+  loadClasicaOffsetsDraft();
+  positionClasicaHandles();
+  renderClasicaEditorPreview();
+  openOverlay("modalClasicaEditor");
+}
+
+let clasicaDragEl = null;
+function bindClasicaDrag(){
+  const stage = qs("#clasicaEditorStage");
+  if(!stage) return;
+  const anchors = getStyleHandleAnchors("clasica");
+  qsa("#clasicaEditorStage .libre-handle").forEach(handle=>{
+    handle.addEventListener("pointerdown", (e)=>{
+      e.preventDefault();
+      clasicaDragEl = handle.dataset.el;
+      handle.classList.add("dragging");
+      try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+    });
+    handle.addEventListener("pointermove", (e)=>{
+      const el = handle.dataset.el;
+      if(clasicaDragEl !== el || !clasicaOffsetsDraft) return;
+      const rect = stage.getBoundingClientRect();
+      if(!rect.width || !rect.height) return;
+      const anchor = anchors[el] || { x:0.5, y:0.5 };
+      const px = (e.clientX - rect.left) / rect.width;
+      const py = (e.clientY - rect.top) / rect.height;
+      const fx = clasicaClamp(px - anchor.x);
+      const fy = clasicaClamp(py - anchor.y);
+      clasicaOffsetsDraft[el] = { fx, fy };
+      const x = Math.max(0.02, Math.min(0.98, anchor.x + fx));
+      const y = Math.max(0.02, Math.min(0.98, anchor.y + fy));
+      handle.style.left = (x*100) + "%";
+      handle.style.top = (y*100) + "%";
+      scheduleClasicaRender();
+    });
+    const endDrag = ()=>{
+      if(clasicaDragEl !== handle.dataset.el) return;
+      handle.classList.remove("dragging");
+      clasicaDragEl = null;
+    };
+    handle.addEventListener("pointerup", endDrag);
+    handle.addEventListener("pointercancel", endDrag);
+  });
+}
+bindClasicaDrag();
+
+qs("#btnOpenClasicaEditor").addEventListener("click", openClasicaEditor);
+qs("#btnCloseClasicaEditor").addEventListener("click", ()=> closeOverlay("modalClasicaEditor"));
+qs("#btnResetClasicaOffsets").addEventListener("click", ()=>{
+  STYLE_LAYOUT_ELS.forEach(k=>{ clasicaOffsetsDraft[k] = { fx:0, fy:0 }; });
+  positionClasicaHandles();
+  renderClasicaEditorPreview();
+  toast("Posiciones de la Clásica restablecidas");
+});
+qs("#btnSaveClasicaOffsets").addEventListener("click", ()=>{
+  state.config.customLayoutByStyle = Object.assign({}, state.config.customLayoutByStyle, { clasica: clasicaOffsetsDraft });
+  saveState();
+  updateTuningPreview();
+  toast("Posiciones de la Clásica guardadas");
+  closeOverlay("modalClasicaEditor");
+});
+
 async function updateTuningPreview(){
   const canvas = qs("#tuningPreviewCanvas");
   if(!canvas) return;
@@ -7936,9 +9309,11 @@ async function updateTuningPreview(){
       lowStockEnabled: qs("#cfgLowStockEnabled").checked,
       lowStockThreshold: parseFloat(qs("#cfgLowStockThreshold").value) || 2,
       lowStockPos: qs("#cfgLowStockPos").value || "tr",
+      ofertaPos: qs("#cfgOfertaPos") ? (qs("#cfgOfertaPos").value || "auto") : "auto",
       blurScale: isNaN(parseFloat(qs("#cfgBlurScale").value)) ? 1 : parseFloat(qs("#cfgBlurScale").value),
       contactScale: isNaN(parseFloat(qs("#cfgContactScale").value)) ? 1 : parseFloat(qs("#cfgContactScale").value)
-    }
+    },
+    customLayoutByStyle: Object.assign({}, state.config.customLayoutByStyle, { clasica: clasicaOffsetsDraft })
   });
   const realConfig = state.config;
   state.config = tempCfg;
@@ -7952,7 +9327,7 @@ async function updateTuningPreview(){
   }
   state.config = realConfig;
 }
-["cfgLogoScale","cfgNameScale","cfgBlurScale","cfgPriceScale","cfgPriceBg","cfgPricePos","cfgRibbonScale","cfgRibbonPos","cfgLowStockEnabled","cfgLowStockThreshold","cfgLowStockPos","cfgContactScale","cfgCardStyle","cfgPromoFrameStyle","cfgFontStyle","cfgColor","cfgSaleColor","cfgNewColor","cfgWatermarkText","cfgWatermarkOpacity","cfgWatermarkSize","cfgStoreName","cfgQrMessage","cfgQrPosition"].forEach(id=>{
+["cfgLogoScale","cfgNameScale","cfgBlurScale","cfgPriceScale","cfgPriceBg","cfgPricePos","cfgRibbonScale","cfgRibbonPos","cfgLowStockEnabled","cfgLowStockThreshold","cfgLowStockPos","cfgOfertaPos","cfgContactScale","cfgCardStyle","cfgPromoFrameStyle","cfgFontStyle","cfgColor","cfgSaleColor","cfgNewColor","cfgWatermarkText","cfgWatermarkOpacity","cfgWatermarkSize","cfgStoreName","cfgQrMessage","cfgQrPosition"].forEach(id=>{
   const el = qs("#"+id);
   if(el) el.addEventListener("change", updateTuningPreview);
 });
@@ -7965,6 +9340,101 @@ qs("#cfgQrEnabled").addEventListener("change", ()=>{
   updateTuningPreview();
 });
 
+// ===================== EDITOR DE RECORTE / ZOOM DE FOTO =====================
+// Deja mover y acercar/alejar la foto principal de un producto dentro del
+// marco de la tarjeta, sin importar qué estilo de tarjeta se use. Se guarda
+// como product.photoFocus = {zoom, ox, oy} (ver drawImageWithFocus).
+let photoCropDraft = null;
+let photoCropImg = null;
+let photoCropDragging = false;
+let photoCropStart = null;
+
+function clamp01neg(v){ return Math.max(-1, Math.min(1, v)); }
+
+async function openPhotoCropEditor(){
+  const imgEl = qs("#photoPreviewBox img");
+  if(!imgEl || !imgEl.src){ toast("Primero agrega una foto"); return; }
+  photoCropImg = await loadImg(imgEl.src);
+  if(!photoCropImg){ toast("No se pudo cargar la foto"); return; }
+  const existing = pendingPhotoFocus || (editingProduct && editingProduct.photoFocus) || null;
+  photoCropDraft = existing ? Object.assign({zoom:1,ox:0,oy:0}, existing) : {zoom:1, ox:0, oy:0};
+  qs("#photoCropZoom").value = photoCropDraft.zoom;
+  qs("#photoCropZoomLabel").textContent = photoCropDraft.zoom.toFixed(2) + "x";
+  renderPhotoCropPreview();
+  openOverlay("modalPhotoCrop");
+}
+
+function renderPhotoCropPreview(){
+  const canvas = qs("#photoCropCanvas");
+  if(!canvas || !photoCropImg) return;
+  const stage = qs("#photoCropStage");
+  const size = Math.round(stage.getBoundingClientRect().width) || 320;
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0,0,size,size);
+  drawImageWithFocus(ctx, photoCropImg, 0, 0, size, size, photoCropDraft);
+}
+
+function bindPhotoCropDrag(){
+  const stage = qs("#photoCropStage");
+  if(!stage) return;
+  stage.addEventListener("pointerdown", (e)=>{
+    if(!photoCropDraft) return;
+    photoCropDragging = true;
+    photoCropStart = { x: e.clientX, y: e.clientY, ox: photoCropDraft.ox, oy: photoCropDraft.oy };
+    stage.style.cursor = "grabbing";
+    try{ stage.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  stage.addEventListener("pointermove", (e)=>{
+    if(!photoCropDragging || !photoCropStart || !photoCropDraft) return;
+    const rect = stage.getBoundingClientRect();
+    if(!rect.width || !rect.height) return;
+    const dxFrac = (e.clientX - photoCropStart.x) / rect.width;
+    const dyFrac = (e.clientY - photoCropStart.y) / rect.height;
+    photoCropDraft.ox = clamp01neg(photoCropStart.ox - dxFrac*2.2);
+    photoCropDraft.oy = clamp01neg(photoCropStart.oy - dyFrac*2.2);
+    renderPhotoCropPreview();
+  });
+  const endDrag = (e)=>{
+    photoCropDragging = false;
+    photoCropStart = null;
+    stage.style.cursor = "grab";
+  };
+  stage.addEventListener("pointerup", endDrag);
+  stage.addEventListener("pointercancel", endDrag);
+}
+qs("#btnOpenPhotoCrop").addEventListener("click", openPhotoCropEditor);
+qs("#btnClosePhotoCrop").addEventListener("click", ()=> closeOverlay("modalPhotoCrop"));
+qs("#photoCropZoom").addEventListener("input", (e)=>{
+  if(!photoCropDraft) return;
+  photoCropDraft.zoom = parseFloat(e.target.value) || 1;
+  qs("#photoCropZoomLabel").textContent = photoCropDraft.zoom.toFixed(2) + "x";
+  renderPhotoCropPreview();
+});
+qs("#btnResetPhotoCrop").addEventListener("click", ()=>{
+  photoCropDraft = {zoom:1, ox:0, oy:0};
+  qs("#photoCropZoom").value = 1;
+  qs("#photoCropZoomLabel").textContent = "1.00x";
+  renderPhotoCropPreview();
+});
+qs("#btnSavePhotoCrop").addEventListener("click", ()=>{
+  pendingPhotoFocus = Object.assign({}, photoCropDraft);
+  toast("Recorte guardado. Toca \"Guardar\" en la ficha del producto para conservarlo.");
+  closeOverlay("modalPhotoCrop");
+});
+bindPhotoCropDrag();
+
+function updateRateFromLabel(){
+  const sel = qs("#cfgCurrency").value;
+  const label = sel === "otro" ? (qs("#cfgCurrencyCustom").value.trim() || "moneda") : sel;
+  qs("#cfgRateToLabel").textContent = label;
+}
+qs("#cfgCurrency").addEventListener("change", ()=>{
+  qs("#cfgCurrencyCustom").style.display = qs("#cfgCurrency").value === "otro" ? "" : "none";
+  updateRateFromLabel();
+});
+qs("#cfgCurrencyCustom").addEventListener("input", updateRateFromLabel);
+
 qs("#btnSaveConfig").addEventListener("click", ()=>{
   state.config.storeName = qs("#cfgStoreName").value.trim() || "Mi Tienda";
   state.config.address = qs("#cfgAddress").value.trim();
@@ -7975,7 +9445,12 @@ qs("#btnSaveConfig").addEventListener("click", ()=>{
   state.config.warrantyText = qs("#cfgWarrantyText").value.trim();
   state.config.extraInfo = qs("#cfgExtraInfo").value.trim();
   state.config.coverStyle = qs("#cfgCoverStyle").value;
-  state.config.currency = qs("#cfgCurrency").value.trim() || "$";
+  state.config.coverPhotoProductId = qs("#cfgCoverPhotoProduct").value || "";
+  state.config.currency = qs("#cfgCurrency").value === "otro"
+    ? (qs("#cfgCurrencyCustom").value.trim() || "USD")
+    : qs("#cfgCurrency").value;
+  state.config.exchangeRate = parseFloat(qs("#cfgExchangeRate").value) || 0;
+  state.config.secondaryCurrency = qs("#cfgSecondaryCurrency").value.trim();
   state.config.primaryColor = qs("#cfgColor").value;
   state.config.extraColors = cfgExtraColorsDraft.slice();
   state.config.colorMode = qs("#cfgColorMode").value;
@@ -7999,9 +9474,11 @@ qs("#btnSaveConfig").addEventListener("click", ()=>{
     lowStockEnabled: qs("#cfgLowStockEnabled").checked,
     lowStockThreshold: parseFloat(qs("#cfgLowStockThreshold").value) || 2,
     lowStockPos: qs("#cfgLowStockPos").value || "tr",
+    ofertaPos: qs("#cfgOfertaPos") ? (qs("#cfgOfertaPos").value || "auto") : "auto",
     blurScale: isNaN(parseFloat(qs("#cfgBlurScale").value)) ? 1 : parseFloat(qs("#cfgBlurScale").value),
     contactScale: isNaN(parseFloat(qs("#cfgContactScale").value)) ? 1 : parseFloat(qs("#cfgContactScale").value)
   };
+  state.config.customLayoutByStyle = Object.assign({}, state.config.customLayoutByStyle, { clasica: clasicaOffsetsDraft });
   state.config.includeOutOfStock = qs("#cfgIncludeOOS").checked;
   state.config.groupByCategory = qs("#cfgGroupByCategory").checked;
   state.config.pdfGridDensity = parseInt(qs("#cfgPdfGridDensity").value, 10) || 6;
@@ -8147,8 +9624,8 @@ qs("#restoreInput").addEventListener("change", async (e)=>{
       restored++;
     }
 
-    saveState();
-    photoUrlCache.clear();
+    flushSaveState();
+    clearAllPhotoUrls();
     loadConfigForm();
     updateCategoryOptions();
     renderProductList();
@@ -8180,10 +9657,11 @@ async function updateStorageInfo(){
 qs("#btnWipeAll").addEventListener("click", async ()=>{
   if(!confirm("Esto borrará TODOS los productos, fotos, configuración, listas guardadas e historial de compartidos/agotados. ¿Continuar?")) return;
   if(!confirm("¿Estás totalmente seguro? Esta acción no se puede deshacer.")) return;
+  if(saveStateTimer){ clearTimeout(saveStateTimer); saveStateTimer = null; }
   localStorage.removeItem(LS_KEY);
   await clearAllPhotos();
-  photoUrlCache.clear();
-  state = { config:{storeName:"Mi Tienda", address:"", phone:"", extraInfo:"", tagline:"", warrantyText:"", coverStyle:"oscuro", currency:"$", primaryColor:"#16a34a", format:"square", cardStyle:"clasica", fontStyle:"moderna", includeOutOfStock:false, hideOutOfStock:false, groupByCategory:false, includeNewSection:false, logo:null}, products:[], oosSnapshot:null, oosHistory:[], savedLists:[], shareEvents:[] };
+  clearAllPhotoUrls();
+  state = { config:{storeName:"Mi Tienda", address:"", phone:"", extraInfo:"", tagline:"", warrantyText:"", coverStyle:"oscuro", currency:"USD", primaryColor:"#16a34a", format:"square", cardStyle:"clasica", fontStyle:"moderna", includeOutOfStock:false, hideOutOfStock:false, groupByCategory:false, includeNewSection:false, logo:null}, products:[], oosSnapshot:null, oosHistory:[], savedLists:[], shareEvents:[] };
   loadConfigForm();
   updateCategoryOptions();
   activeTagFilters = [];
@@ -8548,8 +10026,10 @@ qs("#btnConfirmImport").addEventListener("click", ()=>{
     existingByNameLoose.set(nk.replace(/\s+/g,""), p);
   }
 
+  const autoOffer = qs("#mapAutoOffer") ? qs("#mapAutoOffer").checked : true;
+  const soloPorSku = qs("#mapSkuOnly") ? qs("#mapSkuOnly").checked : false;
   const dataRows = importedRows.slice(importHeaderRow+1);
-  let added = 0, updated = 0, skipped = 0;
+  let added = 0, updated = 0, skipped = 0, autoOffersCount = 0;
   const newWithoutSku = []; // productos creados como nuevos: posibles duplicados por cambio de nombre/SKU
   const newlyOutOfStockIds = []; // productos que YA estaban en el catálogo con stock (o sin cantidad
   // registrada aún) y que con este Excel llegaron en 0: son los que van a "Agotados hoy".
@@ -8579,12 +10059,26 @@ qs("#btnConfirmImport").addEventListener("click", ()=>{
     const skuKey = sku ? normalizeSkuKey(sku) : "";
     const nameKey = normalizeText(name);
     const nameKeyLoose = nameKey.replace(/\s+/g,"");
-    const existing = (skuKey && existingBySku.get(skuKey)) || existingByName.get(nameKey) || existingByNameLoose.get(nameKeyLoose);
+    // Si la fila trae código y está activado "solo por SKU", el emparejamiento se
+    // decide ÚNICAMENTE por el código: no se recurre al nombre como respaldo, así
+    // un cambio de nombre en el Excel nunca puede terminar renombrando o mezclándose
+    // con un producto que en realidad es otro. Sin código en la fila (o con la
+    // opción desmarcada) se sigue usando el nombre como antes.
+    const existing = skuKey
+      ? (existingBySku.get(skuKey) || (!soloPorSku && (existingByName.get(nameKey) || existingByNameLoose.get(nameKeyLoose))))
+      : (existingByName.get(nameKey) || existingByNameLoose.get(nameKeyLoose));
     if(existing){
       // producto ya guardado: solo se actualiza el precio (y la categoría/SKU/cantidad si traen algo nuevo).
       // El NOMBRE nunca se toca aquí a propósito (aunque el emparejamiento haya sido por SKU):
       // así puedes renombrar un producto en tu catálogo sin que el Excel de la máquina te lo
       // vuelva a poner con el nombre viejo. La foto, disponibilidad y demás datos tampoco se tocan.
+      // Si el precio que trae el Excel es menor al que ya tenías guardado, se
+      // guarda el precio de antes como "precio anterior" (tachado) para que la
+      // tarjeta muestre OFERTA sola, sin tener que entrar a editar el producto.
+      if(autoOffer && price > 0 && price < existing.price){
+        existing.oldPrice = existing.price;
+        autoOffersCount++;
+      }
       existing.price = price;
       if(category) existing.category = category;
       if(sku) existing.sku = sku;
@@ -8643,6 +10137,7 @@ qs("#btnConfirmImport").addEventListener("click", ()=>{
   const parts = [];
   if(added) parts.push(`${added} nuevos`);
   if(updated) parts.push(`${updated} con precio actualizado`);
+  if(autoOffersCount) parts.push(`${autoOffersCount} pasaron a OFERTA por bajada de precio 🏷️`);
   if(skipped) parts.push(`${skipped} filas vacías omitidas`);
   if(idxQty !== ""){
     const oosCount = state.products.filter(isOutOfStock).length;
@@ -8790,6 +10285,442 @@ async function checkPhotoIntegrity(){
     toast(`⚠️ ${missing} producto${missing===1?"":"s"} perdieron su foto (el navegador la borró). Usa el filtro "Sin foto" para reponerlas.`);
   }
 }
+
+/* ============================================================
+   SINCRONIZACIÓN CON EL SITIO WEB (imgbb + Firebase Realtime Database)
+   Sube fotos nuevas/cambiadas a imgbb y publica el catálogo
+   completo (incluyendo agotados, marcados como tal) en Firebase,
+   que es lo que lee el sitio web público.
+   ============================================================ */
+let webSyncTimer = null;
+let webSyncRunning = false;
+let webSyncQueued = false;
+
+function setWebSyncStatus(msg){
+  const el = qs("#webSyncStatus");
+  if(el) el.textContent = msg || "";
+}
+
+function updateWebRateLabel(){
+  const el = qs("#webRateToLabel");
+  if(el) el.textContent = state.config.currency || "CUP";
+}
+qs("#webSecondaryCurrency") && qs("#webSecondaryCurrency").addEventListener("input", updateWebRateLabel);
+
+function saveWebCfg(showToast){
+  state.config.webWhatsapp = qs("#webWhatsapp").value.trim();
+  state.config.webFirebaseDbUrl = qs("#webFirebaseDbUrl").value.trim().replace(/\/$/, "");
+  state.config.webFirebaseApiKey = qs("#webFirebaseApiKey").value.trim();
+  state.config.webFirebaseEmail = qs("#webFirebaseEmail").value.trim();
+  state.config.webFirebasePassword = qs("#webFirebasePassword").value;
+  state.config.webImgbbKey = qs("#webImgbbKey").value.trim();
+  state.config.webPhotoQuality = qs("#webPhotoQuality").value;
+  state.config.webColorPrimario = qs("#webColorPrimario").value;
+  state.config.webColorAcento = qs("#webColorAcento").value;
+  state.config.webHoraApertura = qs("#webHoraApertura").value;
+  state.config.webHoraCierre = qs("#webHoraCierre").value;
+  state.config.webDescription = qs("#webDescription").value.trim();
+  state.config.webAddress = qs("#webAddress").value.trim();
+  state.config.webDeliveryText = qs("#webDeliveryText").value.trim();
+  state.config.webFacebookUrl = qs("#webFacebookUrl").value.trim();
+  state.config.webInstagramUrl = qs("#webInstagramUrl").value.trim();
+  state.config.webDescuentoEfectivo = parseFloat(qs("#webDescuentoEfectivo").value) || 0;
+  state.config.webSecondaryCurrency = qs("#webSecondaryCurrency").value.trim();
+  state.config.webExchangeRate = parseFloat(qs("#webExchangeRate").value) || 0;
+  state.config.webBannerEnabled = qs("#webBannerEnabled").checked;
+  state.config.webBannerText = qs("#webBannerText").value.trim();
+  state.config.webMensajePedido = qs("#webMensajePedido").value.trim();
+  state.config.webInfoPago = qs("#webInfoPago").value.trim();
+  state.config.webSyncEnabled = qs("#webSyncEnabled").checked;
+  saveState();
+  if(showToast) toast("Datos del sitio web guardados");
+}
+
+function webSyncConfigured(){
+  const c = state.config;
+  return !!(c.webFirebaseDbUrl && c.webFirebaseApiKey && c.webFirebaseEmail && c.webFirebasePassword && c.webImgbbKey);
+}
+
+// Convierte un Blob a base64 puro (sin el prefijo data:...;base64,) para imgbb.
+function blobToBase64Puro(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// fetch con límite de tiempo: si el servidor no responde en `ms` milisegundos
+// (típico en conexiones inestables), se cancela con un error claro en vez de
+// dejar la sincronización colgada para siempre.
+async function fetchConTimeout(url, opciones, ms){
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=> controller.abort(), ms || 20000);
+  try{
+    return await fetch(url, { ...opciones, signal: controller.signal });
+  }catch(e){
+    if(e.name === "AbortError") throw new Error("tiempo de espera agotado (revisa tu conexión)");
+    throw e;
+  }finally{
+    clearTimeout(timeoutId);
+  }
+}
+
+async function subirFotoSiHaceFalta(product){
+  const blob = await getPhoto(product.id).catch(()=>null);
+  if(!blob){
+    // el producto no tiene foto (o se le quitó): limpiar referencia vieja
+    if(product.webPhotoUrl){ product.webPhotoUrl = null; product.webPhotoSize = null; }
+    return null;
+  }
+  // Si ya se subió esta misma foto antes (mismo tamaño en bytes) con la misma
+  // calidad configurada, no se vuelve a subir. Si cambiaste la calidad en
+  // Config, esto detecta el cambio y la vuelve a subir con la nueva.
+  const calidad = state.config.webPhotoQuality || "original";
+  if(product.webPhotoUrl && product.webPhotoSize === blob.size && product.webPhotoQualityUsed === calidad){
+    return product.webPhotoUrl;
+  }
+  let blobASubir = blob;
+  if(calidad === "media") blobASubir = await compressImageFile(blob, 1000, 0.8);
+  else if(calidad === "baja") blobASubir = await compressImageFile(blob, 700, 0.72);
+  const base64 = await blobToBase64Puro(blobASubir);
+  const fd = new FormData();
+  fd.append("image", base64);
+  const res = await fetchConTimeout(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(state.config.webImgbbKey)}`, {
+    method: "POST",
+    body: fd
+  }, 25000);
+  let data;
+  try{ data = await res.json(); }catch(e){ data = null; }
+  if(!res.ok || !data || data.success === false || !data.data || !data.data.url){
+    const detalle = (data && data.error && data.error.message) ? data.error.message : ("HTTP " + res.status);
+    throw new Error("imgbb (" + product.name + "): " + detalle);
+  }
+  product.webPhotoUrl = data.data.url;
+  product.webPhotoSize = blob.size; // tamaño de la foto local original, para detectar cambios
+  product.webPhotoQualityUsed = calidad;
+  return product.webPhotoUrl;
+}
+
+// Sube el logo del negocio a imgbb (una sola vez; si no cambió, reusa la URL
+// ya subida) para que el sitio web pueda mostrar el mismo logo del catálogo.
+async function subirLogoSiHaceFalta(){
+  const logoDataUrl = state.config.logo;
+  if(!logoDataUrl){
+    if(state.config.webLogoUrl){ state.config.webLogoUrl = null; state.config.webLogoSourceData = null; }
+    return null;
+  }
+  if(state.config.webLogoUrl && state.config.webLogoSourceData === logoDataUrl){
+    return state.config.webLogoUrl;
+  }
+  const base64 = String(logoDataUrl).split(",")[1] || "";
+  const fd = new FormData();
+  fd.append("image", base64);
+  const res = await fetchConTimeout(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(state.config.webImgbbKey)}`, {
+    method: "POST",
+    body: fd
+  }, 25000);
+  let data;
+  try{ data = await res.json(); }catch(e){ data = null; }
+  if(!res.ok || !data || data.success === false || !data.data || !data.data.url){
+    const detalle = (data && data.error && data.error.message) ? data.error.message : ("HTTP " + res.status);
+    throw new Error("imgbb (logo): " + detalle);
+  }
+  state.config.webLogoUrl = data.data.url;
+  state.config.webLogoSourceData = logoDataUrl;
+  return state.config.webLogoUrl;
+}
+
+async function construirPayloadWebLocal(onProgress){
+  // Igual que construirPayloadWeb, pero 100% offline: las fotos NO se suben a
+  // imgbb, se incrustan directo como base64 dentro del propio JSON. Así el
+  // archivo exportado se puede abrir en el sitio sin ninguna conexión.
+  const productos = [];
+  const totalProductos = state.products.length;
+  let procesados = 0;
+  for(const p of state.products){
+    procesados++;
+    if(p.available === false && p.qty === undefined){
+      if(onProgress) onProgress({ procesados, totalProductos });
+      continue;
+    }
+    let photoDataUrl = null;
+    try{
+      const blob = await getPhoto(p.id).catch(()=>null);
+      if(blob){
+        // Se comprime un poco (igual que la calidad "media" al publicar) para
+        // que el archivo no quede gigante con catálogos de cientos de fotos.
+        const comprimida = await compressImageFile(blob, 1000, 0.8);
+        photoDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(comprimida);
+        });
+      }
+    }catch(e){
+      console.error("Error preparando foto local de", p.name, e);
+    }
+    const prod = {
+      id: p.id,
+      name: p.name,
+      price: p.price,
+      category: p.category || "",
+      outOfStock: isOutOfStock(p) || p.available === false
+    };
+    if(isOnSale(p) && p.oldPrice) prod.oldPrice = p.oldPrice;
+    if(p.sku) prod.sku = p.sku;
+    if(p.unit) prod.unit = p.unit;
+    if(photoDataUrl) prod.photo = photoDataUrl;
+    if(p.isNew) prod.isNew = true;
+    productos.push(prod);
+    if(onProgress) onProgress({ procesados, totalProductos });
+  }
+  const tienda = {
+    name: state.config.storeName || "Mi Tienda",
+    whatsapp: state.config.webWhatsapp || "",
+    currency: state.config.currency || "$",
+    tagline: state.config.tagline || "",
+    colorPrimario: state.config.webColorPrimario || "#0F4C3A",
+    colorAcento: state.config.webColorAcento || "#F0662B",
+    mensajePedido: state.config.webMensajePedido || "",
+    infoPago: state.config.webInfoPago || "",
+    horaApertura: state.config.webHoraApertura || "",
+    horaCierre: state.config.webHoraCierre || "",
+    diasAbierto: state.config.webDiasAbierto || [0,1,2,3,4,5,6],
+    descuentoEfectivo: state.config.webDescuentoEfectivo || 0,
+    secondaryCurrency: state.config.webSecondaryCurrency || "",
+    exchangeRate: state.config.webExchangeRate || 0,
+    description: state.config.webDescription || "",
+    address: state.config.webAddress || "",
+    deliveryText: state.config.webDeliveryText || "",
+    facebookUrl: state.config.webFacebookUrl || "",
+    instagramUrl: state.config.webInstagramUrl || "",
+    bannerEnabled: !!state.config.webBannerEnabled,
+    bannerText: state.config.webBannerText || ""
+  };
+  // El logo local ya es una data URL (así se guarda desde que se elige en
+  // Config), así que se usa tal cual, sin subir nada.
+  if(state.config.logo) tienda.logo = state.config.logo;
+  return { tienda, productos };
+}
+
+async function exportarCatalogoLocal(){
+  const btn = qs("#btnExportarWebLocal");
+  const estado = qs("#webExportLocalStatus");
+  if(btn) btn.disabled = true;
+  if(estado) estado.textContent = "Preparando archivo (leyendo fotos)…";
+  try{
+    const payload = await construirPayloadWebLocal(({procesados, totalProductos}) => {
+      if(estado) estado.textContent = `Preparando archivo… ${procesados}/${totalProductos} productos`;
+    });
+    const blob = new Blob([JSON.stringify({ tienda: payload.tienda, productos: payload.productos })], { type: "application/json" });
+    const filename = "catalogo-local.json";
+    if(await nativeSaveOrShare(blob, filename, {title:"Catálogo (JSON)", savedMessage:"Archivo listo", folder:"Catalogo-JSON"})){
+      if(estado) estado.textContent = `✅ Listo (${payload.productos.length} productos). Ábrelo desde el sitio web con "Cargar catálogo desde archivo".`;
+    }else{
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      if(estado) estado.textContent = `✅ Listo — se descargó "${filename}" (${payload.productos.length} productos). Ábrelo desde el sitio web con "Cargar catálogo desde archivo".`;
+    }
+  }catch(e){
+    console.error(e);
+    if(estado) estado.textContent = "❌ No se pudo generar el archivo: " + e.message;
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+if(qs("#btnExportarWebLocal")) qs("#btnExportarWebLocal").addEventListener("click", exportarCatalogoLocal);
+
+async function construirPayloadWeb(onProgress){
+
+  const productos = [];
+  const statsFotos = { intentadas: 0, subidas: 0, fallidas: 0 };
+  const totalProductos = state.products.length;
+  let procesados = 0;
+  for(const p of state.products){
+    procesados++;
+    if(p.available === false && p.qty === undefined){
+      // producto ocultado a mano y sin control de stock: no se publica en el sitio
+      if(onProgress) onProgress({ procesados, totalProductos, statsFotos });
+      continue;
+    }
+    let photoUrl = null;
+    const teniaFotoLocal = !!(await getPhoto(p.id).catch(()=>null));
+    if(teniaFotoLocal) statsFotos.intentadas++;
+    if(teniaFotoLocal) statsFotos.intentadas++;
+    try{
+      photoUrl = await subirFotoSiHaceFalta(p);
+      if(teniaFotoLocal && photoUrl) statsFotos.subidas++;
+      else if(teniaFotoLocal && !photoUrl) statsFotos.fallidas++;
+    }catch(e){
+      console.error("Error subiendo foto de", p.name, e);
+      if(teniaFotoLocal) statsFotos.fallidas++;
+    }
+    // Solo se incluyen los campos opcionales cuando tienen valor real.
+    // Con cientos de productos, mandar "sku":"","unit":"","oldPrice":null
+    // en cada uno suma varios KB de más sin aportar nada. Firebase no tiene
+    // el límite de tamaño que sí tenía jsonbin, pero igual conviene mandar
+    // menos datos por velocidad.
+    const prod = {
+      id: p.id,
+      name: p.name,
+      price: p.price,
+      category: p.category || "",
+      outOfStock: isOutOfStock(p) || p.available === false
+    };
+    if(isOnSale(p) && p.oldPrice) prod.oldPrice = p.oldPrice;
+    if(p.sku) prod.sku = p.sku;
+    if(p.unit) prod.unit = p.unit;
+    if(photoUrl) prod.photo = photoUrl;
+    if(p.isNew) prod.isNew = true;
+    productos.push(prod);
+    if(onProgress) onProgress({ procesados, totalProductos, statsFotos });
+  }
+  // logo del negocio: se sube una sola vez (o cuando cambia) y se incluye en
+  // "tienda" para que el sitio web muestre siempre el mismo logo del catálogo.
+  let logoUrl = null;
+  try{ logoUrl = await subirLogoSiHaceFalta(); }catch(e){ console.error("Error subiendo el logo", e); }
+
+  // "tienda" viaja junto al catálogo para que el sitio web use SIEMPRE lo que
+  // tengas configurado aquí (nombre, WhatsApp, moneda) — nunca un valor fijo
+  // escrito a mano en el código del sitio.
+  const tienda = {
+    name: state.config.storeName || "Mi Tienda",
+    whatsapp: state.config.webWhatsapp || "",
+    currency: state.config.currency || "$",
+    tagline: state.config.tagline || "",
+    colorPrimario: state.config.webColorPrimario || "#0F4C3A",
+    colorAcento: state.config.webColorAcento || "#F0662B",
+    mensajePedido: state.config.webMensajePedido || "",
+    infoPago: state.config.webInfoPago || "",
+    horaApertura: state.config.webHoraApertura || "",
+    horaCierre: state.config.webHoraCierre || "",
+    diasAbierto: state.config.webDiasAbierto || [0,1,2,3,4,5,6],
+    descuentoEfectivo: state.config.webDescuentoEfectivo || 0,
+    secondaryCurrency: state.config.webSecondaryCurrency || "",
+    exchangeRate: state.config.webExchangeRate || 0,
+    description: state.config.webDescription || "",
+    address: state.config.webAddress || "",
+    deliveryText: state.config.webDeliveryText || "",
+    facebookUrl: state.config.webFacebookUrl || "",
+    instagramUrl: state.config.webInstagramUrl || "",
+    bannerEnabled: !!state.config.webBannerEnabled,
+    bannerText: state.config.webBannerText || ""
+  };
+  if(logoUrl) tienda.logo = logoUrl;
+  return { tienda, productos, statsFotos };
+}
+
+// Firebase Auth (REST, sin SDK) — inicia sesión con la cuenta de email/contraseña
+// creada en el proyecto, para obtener un token que autorice a escribir en la
+// Realtime Database. El token se cachea en memoria (dura ~1h) para no pedir
+// uno nuevo en cada sincronización — pedir uno nuevo cada vez agota la cuota
+// de verificación de contraseñas de Firebase (error QUOTA_EXCEEDED) cuando
+// hay varios guardados seguidos.
+let firebaseTokenCache = null; // { idToken, expiraEn } — expiraEn en ms epoch
+
+async function obtenerIdTokenFirebase(){
+  const c = state.config;
+  const ahora = Date.now();
+  // margen de 5 min antes de que expire, por si la sync tarda un poco
+  if(firebaseTokenCache && firebaseTokenCache.expiraEn - ahora > 5 * 60 * 1000){
+    return firebaseTokenCache.idToken;
+  }
+  const res = await fetchConTimeout(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(c.webFirebaseApiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: c.webFirebaseEmail, password: c.webFirebasePassword, returnSecureToken: true })
+  }, 15000);
+  let data = null;
+  try{ data = await res.json(); }catch(e){}
+  if(!res.ok || !data || !data.idToken){
+    const msg = (data && data.error && data.error.message) ? data.error.message : ("HTTP " + res.status);
+    firebaseTokenCache = null;
+    throw new Error("no se pudo iniciar sesión en Firebase (" + msg + ")");
+  }
+  // expiresIn viene en segundos como string (normalmente "3600")
+  const expiresInMs = (parseInt(data.expiresIn, 10) || 3600) * 1000;
+  firebaseTokenCache = { idToken: data.idToken, expiraEn: ahora + expiresInMs };
+  return data.idToken;
+}
+
+async function publicarEnFirebase(payload){
+  const idToken = await obtenerIdTokenFirebase();
+  const body = JSON.stringify(payload);
+  const tamanoKB = Math.round(new Blob([body]).size / 1024);
+  const res = await fetchConTimeout(`${state.config.webFirebaseDbUrl}/catalogo.json?auth=${encodeURIComponent(idToken)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body
+  }, 20000);
+  if(!res.ok){
+    let detalle = "";
+    try{ const errJson = await res.json(); detalle = errJson && errJson.error ? errJson.error : ""; }catch(e){}
+    throw new Error("Firebase respondió " + res.status + (detalle ? (": " + detalle) : "") + ` (payload ~${tamanoKB} KB)`);
+  }
+  return tamanoKB;
+}
+
+async function sincronizarConWeb(){
+  if(!webSyncConfigured()){
+    setWebSyncStatus("⚠️ Falta completar los datos de Firebase/imgbb arriba.");
+    return;
+  }
+  if(webSyncRunning){ webSyncQueued = true; return; }
+  webSyncRunning = true;
+  setWebSyncStatus("🔄 Sincronizando con el sitio web...");
+  try{
+    let ultimoAviso = 0;
+    const { tienda, productos, statsFotos } = await construirPayloadWeb((prog)=>{
+      const ahora = Date.now();
+      // se actualiza como máximo cada 400ms (o al terminar) para no saturar la pantalla
+      if(ahora - ultimoAviso < 400 && prog.procesados < prog.totalProductos) return;
+      ultimoAviso = ahora;
+      let msg = `🔄 Sincronizando... producto ${prog.procesados} de ${prog.totalProductos}`;
+      if(prog.statsFotos.intentadas > 0){
+        msg += ` — fotos: ✅${prog.statsFotos.subidas} ❌${prog.statsFotos.fallidas} de ${prog.statsFotos.intentadas}`;
+      }
+      setWebSyncStatus(msg);
+    });
+    const tamanoKB = await publicarEnFirebase({ tienda, productos }); // statsFotos no se publica, es solo para este mensaje
+    saveState(); // persiste las webPhotoUrl/webPhotoSize que se cachearon en cada producto
+    let avisoFotos = "";
+    if(statsFotos.fallidas > 0){
+      avisoFotos = ` — ⚠️ ${statsFotos.fallidas} de ${statsFotos.intentadas} fotos no se pudieron subir (mala conexión), se reintentan solas la próxima vez`;
+    }
+    setWebSyncStatus("✅ Sitio web actualizado — " + new Date().toLocaleTimeString("es") + ` (${tamanoKB} KB)` + avisoFotos);
+  }catch(e){
+    console.error("Error sincronizando con el sitio web", e);
+    const motivo = (e && e.message) ? e.message : "revisa tu conexión o tus llaves";
+    setWebSyncStatus("❌ No se pudo sincronizar: " + motivo + ". Se reintentará en el próximo guardado.");
+  }finally{
+    webSyncRunning = false;
+    if(webSyncQueued){ webSyncQueued = false; sincronizarConWeb(); }
+  }
+}
+
+// Se llama automáticamente cada vez que se guarda el catálogo (flushSaveState).
+// Se espera un poco (debounce) para no disparar una sincronización por cada
+// tecla o clic cuando se editan varios productos seguidos.
+function programarSincronizacionWeb(){
+  if(!state.config.webSyncEnabled || !webSyncConfigured()) return;
+  if(webSyncTimer) clearTimeout(webSyncTimer);
+  webSyncTimer = setTimeout(sincronizarConWeb, 2500);
+}
+
+if(qs("#btnGuardarWebCfg")) qs("#btnGuardarWebCfg").addEventListener("click", ()=> saveWebCfg(true));
+if(qs("#btnSincronizarAhora")) qs("#btnSincronizarAhora").addEventListener("click", ()=>{
+  saveWebCfg(false);
+  sincronizarConWeb();
+});
 
 function init(){
   loadState();
