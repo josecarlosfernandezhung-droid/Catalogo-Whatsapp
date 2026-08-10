@@ -176,6 +176,13 @@
   .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:4px;}
   body.hide-tips .hint.tip{display:none;}
 
+  .dia-toggle{
+    border:1.5px solid var(--border); background:var(--panel2); color:var(--muted);
+    border-radius:999px; padding:7px 12px; font-size:12.5px; font-weight:600;
+    cursor:pointer; -webkit-tap-highlight-color:transparent;
+  }
+  .dia-toggle.active{ background:var(--green-dim); border-color:var(--green); color:var(--green); }
+
   /* Modo solo lectura: para prestar el teléfono a otro cajero sin riesgo de
      que edite/borre productos o cambie la configuración por accidente. */
   body.read-only .tab[data-tab="importar"],
@@ -993,7 +1000,19 @@
         <input type="time" id="webHoraCierre">
       </div>
     </div>
-    <span class="hint tip">Si lo dejas vacío, el sitio no muestra el horario. Se calcula con la hora del teléfono de quien visita, todos los días igual.</span>
+    <span class="hint tip">Si lo dejas vacío, el sitio no muestra el horario. Se calcula con la hora del teléfono de quien visita.</span>
+
+    <label style="margin-top:10px;">Días que abres</label>
+    <div class="row" id="webDiasAbiertoRow" style="gap:6px;flex-wrap:wrap;">
+      <button type="button" class="dia-toggle" data-dia="1">Lun</button>
+      <button type="button" class="dia-toggle" data-dia="2">Mar</button>
+      <button type="button" class="dia-toggle" data-dia="3">Mié</button>
+      <button type="button" class="dia-toggle" data-dia="4">Jue</button>
+      <button type="button" class="dia-toggle" data-dia="5">Vie</button>
+      <button type="button" class="dia-toggle" data-dia="6">Sáb</button>
+      <button type="button" class="dia-toggle" data-dia="0">Dom</button>
+    </div>
+    <span class="hint tip">Toca los días en que abres tu tienda. El sitio mostrará "Cerrado" fuera de esos días, aunque esté dentro del horario.</span>
 
     <label style="margin-top:10px;">Descripción de la tienda (opcional)</label>
     <textarea id="webDescription" rows="3" placeholder="Cuéntale al cliente qué vendes, en qué se especializa tu tienda, etc."></textarea>
@@ -1560,6 +1579,7 @@ let state = {
     webColorAcento: "#F0662B",    // color de acento del sitio (etiqueta OFERTA, burbuja del carrito)
     webHoraApertura: "",          // "HH:MM" — vacío = no se muestra horario en el sitio
     webHoraCierre: "",            // "HH:MM"
+    webDiasAbierto: [0,1,2,3,4,5,6], // días que abre: 0=domingo … 6=sábado. Por defecto, todos.
     webDescription: "",           // texto sobre la tienda, se muestra en el panel de info del sitio
     webAddress: "",                // ubicación, ej: "Santiago de Cuba, Santiago de Cuba"
     webDeliveryText: "",           // ej: "Entregamos a domicilio" — vacío = no se muestra
@@ -2319,10 +2339,7 @@ qs("#btnDownloadCombo").addEventListener("click", async ()=>{
   const name = qs("#comboName").value.trim() || "combo";
   const filename = safeFileName(name) + "." + exportImageMeta().ext;
   if(await nativeSaveOrShare(blob, filename, {title: name, savedMessage:"Imagen guardada", folder:"Tarjetas"})) return;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
+  await descargarBlobCompat(blob, filename);
   toast("Imagen descargada");
 });
 
@@ -2336,10 +2353,7 @@ qs("#btnShareCombo").addEventListener("click", async ()=>{
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{ await navigator.share({files:[file], title:name}); }catch(e){ /* cancelado */ }
   }else{
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = file.name;
-    a.click();
+    await descargarBlobCompat(blob, file.name);
     toast("Tu navegador no permite compartir directo. Se descargó la imagen para enviarla por WhatsApp.");
   }
 });
@@ -2984,12 +2998,7 @@ async function shareCardsOrDownloadZip(files, zipNameBase, shareTitle){
       zipFiles.push({name: f.name, data: buf});
     }
     const zipBlob = buildZip(zipFiles);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(zipBlob);
-    a.download = zipNameBase + "-" + new Date().toISOString().slice(0,10) + ".zip";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    await descargarBlobCompat(zipBlob, zipNameBase + "-" + new Date().toISOString().slice(0,10) + ".zip");
     toast("Tu navegador no permite compartir varias imágenes directo. Se descargó un ZIP con las tarjetas para enviarlas por WhatsApp.");
   }catch(err){
     console.error("Fallo generando ZIP de tarjetas:", err);
@@ -8137,6 +8146,39 @@ function blobToBase64(blob){
     reader.readAsDataURL(blob);
   });
 }
+
+// Descarga un blob de forma compatible con las apps empaquetadas en WebView
+// (AppMint, WebIntoApp, etc.) cuando nativeSaveOrShare no aplica (no es
+// Capacitor) y compartir tampoco funcionó. El truco de siempre — un <a> con
+// href = URL.createObjectURL(blob) — falla en silencio en varios de estos
+// WebView: el visor de descargas del teléfono crea el archivo con el nombre
+// correcto, pero como no sabe leer una URL blob: (no es una dirección de
+// internet real), el archivo queda guardado con 0 bytes, vacío. Usando en
+// cambio un data: URI con el contenido en base64, el WebView puede
+// decodificarlo directo, sin tener que "descargarlo" de ningún lado.
+async function descargarBlobCompat(blob, filename){
+  try{
+    const base64 = await blobToBase64(blob);
+    const mime = blob.type || "application/octet-stream";
+    const a = document.createElement("a");
+    a.href = `data:${mime};base64,${base64}`;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }catch(err){
+    // Último recurso: el método de siempre, por si el archivo es tan grande
+    // que falla al convertirlo a base64 (poco común, pero mejor no dejar al
+    // usuario sin nada).
+    console.error("descargarBlobCompat: fallo con data URI, se intenta con blob URL", err);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
 async function nativeSaveOrShare(blob, filename, opts){
   opts = opts || {};
   if(!isNativeApp()) return false;
@@ -8203,10 +8245,7 @@ qs("#btnDownloadCard").addEventListener("click", async ()=>{
   const blob = await canvasToBlob(canvas);
   const filename = safeFileName((currentCardDisplay||currentCardProduct).name) + "." + exportImageMeta().ext;
   if(await nativeSaveOrShare(blob, filename, {title:(currentCardDisplay||currentCardProduct).name, savedMessage:"Imagen guardada", folder:"Tarjetas"})) return;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
+  await descargarBlobCompat(blob, filename);
   toast("Imagen descargada");
 });
 
@@ -8224,10 +8263,7 @@ qs("#btnShareCard").addEventListener("click", async ()=>{
       await navigator.share({files:[file], title: displayName});
     }catch(e){ /* usuario canceló */ }
   }else{
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = file.name;
-    a.click();
+    await descargarBlobCompat(blob, file.name);
     toast("Tu navegador no permite compartir directo. Se descargó la imagen para enviarla por WhatsApp.");
   }
 });
@@ -8255,10 +8291,7 @@ qs("#btnShareCardDoc").addEventListener("click", async ()=>{
   // Si el navegador no admite compartir este tipo de archivo directo, se
   // descarga para que lo adjuntes manualmente en WhatsApp como Documento
   // (ícono de clip 📎 → Documento → buscar el archivo descargado).
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = safeFileName(displayName) + "." + imeta.ext;
-  a.click();
+  await descargarBlobCompat(blob, safeFileName(displayName) + "." + imeta.ext);
   toast("Se descargó la imagen. En WhatsApp: 📎 → Documento → elige este archivo, así no se comprime.");
 });
 
@@ -8392,10 +8425,7 @@ qs("#btnExportAll").addEventListener("click", async ()=>{
     if(await nativeSaveOrShare(zipBlob, zipName, {title:"Catálogo", savedMessage:"ZIP guardado", folder:"Tarjetas"})){
       toast(files.length + " tarjetas exportadas");
     }else{
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(zipBlob);
-      a.download = zipName;
-      a.click();
+      await descargarBlobCompat(zipBlob, zipName);
       toast(files.length + " tarjetas exportadas");
     }
   }catch(e){
@@ -8742,10 +8772,7 @@ qs("#btnDownloadPdf").addEventListener("click", async ()=>{
   if(!lastCatalogPdfBlob) return;
   const filename = "catalogo-" + new Date().toISOString().slice(0,10) + ".pdf";
   if(await nativeSaveOrShare(lastCatalogPdfBlob, filename, {title:"Catálogo", savedMessage:"PDF guardado", folder:"Catalogo-PDF"})) return;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(lastCatalogPdfBlob);
-  a.download = filename;
-  a.click();
+  await descargarBlobCompat(lastCatalogPdfBlob, filename);
 });
 
 qs("#btnSharePdf").addEventListener("click", async ()=>{
@@ -8755,10 +8782,7 @@ qs("#btnSharePdf").addEventListener("click", async ()=>{
   if(navigator.canShare && navigator.canShare({files:[file]})){
     try{ await navigator.share({files:[file], title:"Catálogo"}); }catch(e){ /* cancelado */ }
   }else{
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(lastCatalogPdfBlob);
-    a.download = file.name;
-    a.click();
+    await descargarBlobCompat(lastCatalogPdfBlob, file.name);
     toast("Tu navegador no permite compartir directo. Se descargó el PDF para enviarlo por WhatsApp.");
   }
 });
@@ -9031,6 +9055,7 @@ function loadConfigForm(){
   qs("#webColorAcento").value = state.config.webColorAcento || "#F0662B";
   qs("#webHoraApertura").value = state.config.webHoraApertura || "";
   qs("#webHoraCierre").value = state.config.webHoraCierre || "";
+  pintarDiasAbierto();
   qs("#webDescription").value = state.config.webDescription || "";
   qs("#webAddress").value = state.config.webAddress || "";
   qs("#webDeliveryText").value = state.config.webDeliveryText || "";
@@ -9535,12 +9560,7 @@ qs("#btnExportExcel").addEventListener("click", async ()=>{
   if(await nativeSaveOrShare(blob, csvName, {title:"Productos CSV", savedMessage:"CSV guardado", folder:"Excel-CSV"})){
     toast(`${state.products.length} productos exportados a CSV`);
   }else{
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = csvName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    await descargarBlobCompat(blob, csvName);
     toast(`${state.products.length} productos exportados a CSV (se abre en Excel)`);
   }
 });
@@ -9579,10 +9599,7 @@ qs("#btnBackup").addEventListener("click", async ()=>{
     if(await nativeSaveOrShare(zip, zipName, {title:"Copia de seguridad", savedMessage:"Copia guardada", folder:"Copias-de-seguridad"})){
       toast(`Copia guardada: ${state.products.length} productos y ${photoCount} fotos`);
     }else{
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(zip);
-      a.download = zipName;
-      a.click();
+      await descargarBlobCompat(zip, zipName);
       toast(`Copia guardada: ${state.products.length} productos y ${photoCount} fotos`);
     }
   }catch(e){
@@ -10332,9 +10349,26 @@ function saveWebCfg(showToast){
   state.config.webMensajePedido = qs("#webMensajePedido").value.trim();
   state.config.webInfoPago = qs("#webInfoPago").value.trim();
   state.config.webSyncEnabled = qs("#webSyncEnabled").checked;
+  state.config.webDiasAbierto = Array.from(document.querySelectorAll(".dia-toggle.active")).map(b => parseInt(b.dataset.dia, 10));
+  if(!state.config.webDiasAbierto.length) state.config.webDiasAbierto = [0,1,2,3,4,5,6]; // ninguno marcado = se asume abierto todos los días, para no dejar el sitio "cerrado" por accidente
   saveState();
   if(showToast) toast("Datos del sitio web guardados");
 }
+
+// Pinta en el selector de días cuáles están marcados como abiertos, según lo
+// guardado en state.config.webDiasAbierto (por defecto, todos los días).
+function pintarDiasAbierto(){
+  const dias = (state.config.webDiasAbierto && state.config.webDiasAbierto.length) ? state.config.webDiasAbierto : [0,1,2,3,4,5,6];
+  document.querySelectorAll(".dia-toggle").forEach(btn => {
+    btn.classList.toggle("active", dias.includes(parseInt(btn.dataset.dia, 10)));
+  });
+}
+document.querySelectorAll(".dia-toggle").forEach(btn => {
+  btn.addEventListener("click", () => {
+    btn.classList.toggle("active");
+    saveWebCfg(false); // guarda de una vez, igual que el resto de ajustes del sitio se guardan al salir del campo
+  });
+});
 
 function webSyncConfigured(){
   const c = state.config;
@@ -10520,14 +10554,7 @@ async function exportarCatalogoLocal(){
     if(await nativeSaveOrShare(blob, filename, {title:"Catálogo (JSON)", savedMessage:"Archivo listo", folder:"Catalogo-JSON"})){
       if(estado) estado.textContent = `✅ Listo (${payload.productos.length} productos). Ábrelo desde el sitio web con "Cargar catálogo desde archivo".`;
     }else{
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      await descargarBlobCompat(blob, filename);
       if(estado) estado.textContent = `✅ Listo — se descargó "${filename}" (${payload.productos.length} productos). Ábrelo desde el sitio web con "Cargar catálogo desde archivo".`;
     }
   }catch(e){
