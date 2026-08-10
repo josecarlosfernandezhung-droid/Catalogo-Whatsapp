@@ -8361,18 +8361,27 @@ function blobToBase64(blob){
 // La solución: escribirlo en pedacitos (2 MB crudos por vez), con
 // writeFile para el primero y appendFile para el resto, así nunca se manda
 // un texto gigante de una sola vez.
-const TAMANO_BLOQUE_ESCRITURA = 2 * 1024 * 1024; // 2 MB por bloque
+// Tamaño de bloque adaptativo: archivos chicos = 2MB, grandes = 5MB
+// (menos llamadas = escritura más rápida en archivos gigantes)
+function getTamanoBloque(totalBytes){
+  if(totalBytes > 500 * 1024 * 1024) return 5 * 1024 * 1024; // >500MB = 5MB bloques
+  return 2 * 1024 * 1024; // chicos = 2MB bloques
+}
+
 async function escribirArchivoPorBloques(Filesystem, relPath, blob, directory){
   const total = blob.size;
+  const TAMANO_BLOQUE = getTamanoBloque(total);
+  
   // Archivos chicos: como siempre, un solo writeFile — no hace falta complicarlo.
-  if(total <= TAMANO_BLOQUE_ESCRITURA){
+  if(total <= TAMANO_BLOQUE){
     const base64 = await blobToBase64(blob);
     return await Filesystem.writeFile({ path: relPath, data: base64, directory, recursive: true });
   }
   let offset = 0;
   let primero = true;
+  logDebug(`Escribiendo archivo grande "${relPath}" en bloques de ${TAMANO_BLOQUE / (1024*1024)}MB (total: ${Math.round(total/(1024*1024))}MB)`);
   while(offset < total){
-    const pedazo = blob.slice(offset, offset + TAMANO_BLOQUE_ESCRITURA);
+    const pedazo = blob.slice(offset, offset + TAMANO_BLOQUE);
     const base64Pedazo = await blobToBase64(pedazo);
     if(primero){
       await Filesystem.writeFile({ path: relPath, data: base64Pedazo, directory, recursive: true });
@@ -8382,7 +8391,7 @@ async function escribirArchivoPorBloques(Filesystem, relPath, blob, directory){
       // writeFile), por eso la pedimos aparte con getUri al terminar.
       await Filesystem.appendFile({ path: relPath, data: base64Pedazo, directory });
     }
-    offset += TAMANO_BLOQUE_ESCRITURA;
+    offset += TAMANO_BLOQUE;
     logDebug(`Escribiendo por bloques "${relPath}": ${Math.min(offset,total)} / ${total} bytes`);
   }
   return await Filesystem.getUri({ path: relPath, directory });
@@ -8432,11 +8441,15 @@ async function nativeSaveOrShare(blob, filename, opts){
   }
   logDebug(`isNativeApp() = true → corriendo dentro del APK (Capacitor detectado).`, "ok");
   
-  // Timeout de 8 segundos: si la escritura a Filesystem no responde en ese
-  // tiempo (archivo muy grande o problema del plugin), aborta y usa
-  // descargarBlobCompat en su lugar. No queda el usuario esperando
-  // indefinidamente.
-  const TIMEOUT_FILESYSTEM = 8000; // ms
+  // Timeout para Filesystem: archivos chicos (tarjeta individual) = 5s.
+  // Archivos medianos (ZIP de ~500MB) = 30s. Archivos muy grandes (>1GB) = 90s.
+  // Los timeouts cortos originales (8s) fallaban con catálogos grandes que
+  // tardaban genuinamente más tiempo en escribirse, así que ahora escalamos
+  // según el tamaño del blob.
+  let TIMEOUT_FILESYSTEM = 5000;
+  if(blob.size > 100 * 1024 * 1024) TIMEOUT_FILESYSTEM = 30000; // >100MB = 30s
+  if(blob.size > 500 * 1024 * 1024) TIMEOUT_FILESYSTEM = 60000; // >500MB = 60s
+  if(blob.size > 1024 * 1024 * 1024) TIMEOUT_FILESYSTEM = 90000; // >1GB = 90s
   
   try{
     const plugins = window.Capacitor.Plugins || {};
@@ -8451,7 +8464,8 @@ async function nativeSaveOrShare(blob, filename, opts){
     
     const folder = opts.folder || "Otros";
     const relPath = `CatalogoWhatsApp/${folder}/${filename}`;
-    logDebug(`Escribiendo archivo en almacenamiento externo: ${relPath} (${blob.size > TAMANO_BLOQUE_ESCRITURA ? "por bloques, archivo grande" : "de una vez, archivo chico"})`);
+    const TAMANO_BLOQUE = getTamanoBloque(blob.size);
+    logDebug(`Escribiendo archivo en almacenamiento externo: ${relPath} (${blob.size > TAMANO_BLOQUE ? "por bloques, archivo grande" : "de una vez, archivo chico"}) — ${Math.round(blob.size/(1024*1024))}MB`);
 
     let written = null;
     try{
