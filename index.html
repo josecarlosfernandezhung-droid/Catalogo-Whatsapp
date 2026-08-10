@@ -3566,7 +3566,16 @@ async function generateSelectedCardFiles(btn, asDocument){
         files.push(new File([blob], name, {type:imeta.mime}));
       }
       productIds.push(p.id);
-      if((idx+1) % 8 === 0) await new Promise(r=>setTimeout(r, 0));
+      // Cada 8 tarjetas le damos un respiro corto al navegador (repinta el
+      // spinner, atiende toques). Cada 80, una pausa más larga: le da tiempo
+      // al teléfono a liberar la memoria de las imágenes ya usadas antes de
+      // seguir, para que no se sienta trabado en catálogos grandes.
+      if((idx+1) % 80 === 0 && idx+1 < selected.length){
+        btn.innerHTML = `<span class="spinner"></span> Pausa breve (${idx+1}/${selected.length})...`;
+        await new Promise(r=>setTimeout(r, 300));
+      }else if((idx+1) % 8 === 0){
+        await new Promise(r=>setTimeout(r, 0));
+      }
     }
     return { files, productIds };
   }catch(e){
@@ -8606,10 +8615,17 @@ qs("#btnExportAll").addEventListener("click", async ()=>{
       while(usedNames.has(name)){ name = base + "-" + n + "." + imeta.ext; n++; }
       usedNames.add(name);
       files.push({name, data: buf});
-      // Cada tanto le damos un respiro al navegador para que no se sienta
-      // "trabado" (repinta el spinner, procesa toques, etc.) — importante
+      // Cada 8 tarjetas le damos un respiro corto al navegador para que no
+      // se sienta "trabado" (repinta el spinner, procesa toques, etc.).
+      // Cada 80, una pausa más larga: le da tiempo al teléfono a liberar la
+      // memoria de las imágenes ya generadas antes de seguir — importante
       // sobre todo en catálogos grandes dentro de la app empaquetada.
-      if(i % 8 === 0) await new Promise(r=>setTimeout(r, 0));
+      if((i) % 80 === 0 && i < total){
+        btn.innerHTML = `<span class="spinner"></span> Pausa breve (${i}/${total})...`;
+        await new Promise(r=>setTimeout(r, 300));
+      }else if(i % 8 === 0){
+        await new Promise(r=>setTimeout(r, 0));
+      }
     }
     btn.innerHTML = '<span class="spinner"></span> Armando ZIP...';
     await new Promise(r=>setTimeout(r, 0));
