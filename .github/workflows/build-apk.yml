@@ -26,8 +26,27 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Usa siempre el MISMO keystore de depuración (guardado como secreto)
+      # en vez de dejar que Gradle cree uno nuevo y distinto en cada build.
+      # Así el APK queda firmado igual todas las veces y Android te deja
+      # instalar la versión nueva encima de la anterior, sin desinstalar.
+      - name: Usar un keystore de depuración fijo (para poder actualizar sin desinstalar)
+        run: |
+          mkdir -p ~/.android
+          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > ~/.android/debug.keystore
+
       - name: Instalar dependencias
         run: npm install
+
+      # Capacitor empaqueta lo que haya en la carpeta que diga "webDir" en
+      # capacitor.config.json (en este proyecto, "www"). Como el index.html
+      # vive en la raíz del repo y no en esa carpeta, hay que copiarlo ahí
+      # ANTES de "cap add android" — si no, la app empaqueta una carpeta
+      # vacía o vieja y ninguno de los cambios del index.html llega al APK.
+      - name: Preparar la carpeta www (assets web para Capacitor)
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
 
       - name: Agregar la plataforma Android
         run: npx cap add android
