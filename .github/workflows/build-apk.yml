@@ -49,28 +49,7 @@ jobs:
         with:
           name: catalogo-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Publicar el APK en "Releases" (descarga directa, sin descomprimir)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ultima-compilacion
-          name: "Última compilación"
-          body: "APK generado automáticamente desde el código en main. Descarga app-debug.apk aquí abajo."
-          prerelease: true
-          files: android/app/build/outputs/apk/debug/app-debug.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compilar el APK (debug)
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Subir el APK como artefacto
-        uses: actions/upload-artifact@v4
-        with:
-          name: catalogo-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          overwrite: true
 
       - name: Publicar el APK en "Releases" (descarga directa, sin descomprimir)
         uses: softprops/action-gh-release@v2
