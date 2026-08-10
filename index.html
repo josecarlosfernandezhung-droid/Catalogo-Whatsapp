@@ -3021,56 +3021,106 @@ qs("#btnOosUndo").addEventListener("click", () => {
   toast("Lista de agotados restaurada");
 });
 
+// Un ZIP de cientos de MB (catálogos grandes, 500+ productos con fotos) tarda
+// muchísimo en convertirse a base64 —tanto para el puente de Capacitor como
+// para el data URI de descarga en descargarBlobCompat— y ese proceso puede
+// congelarse o fallar en silencio. La solución: a partir de cierto tamaño,
+// en vez de UN ZIP gigante se arman VARIOS ZIPs más chicos (por partes),
+// cada uno guardado/compartido por separado.
+const LIMITE_ZIP_LOTE = 450 * 1024 * 1024; // 450MB por ZIP
+
+// Reparte una lista de {name, data:Uint8Array} en lotes que no superen
+// limiteBytes cada uno. Un archivo individual más grande que el límite queda
+// solo en su propio lote (no se puede partir un archivo suelto).
+function agruparEnLotes(zipFiles, limiteBytes){
+  const lotes = [];
+  let loteActual = [];
+  let tamanoActual = 0;
+  for(const f of zipFiles){
+    if(tamanoActual > 0 && tamanoActual + f.data.length > limiteBytes){
+      lotes.push(loteActual);
+      loteActual = [];
+      tamanoActual = 0;
+    }
+    loteActual.push(f);
+    tamanoActual += f.data.length;
+  }
+  if(loteActual.length) lotes.push(loteActual);
+  return lotes;
+}
+
+// Guarda o comparte un conjunto de archivos ya cargados en memoria
+// ({name, data:Uint8Array}) como uno o varios ZIPs, partiendo
+// automáticamente en varios cuando el total pesa demasiado.
+async function guardarOCompartirZipPorLotes(zipFiles, zipNameBase, shareTitle, folder){
+  const totalBytes = zipFiles.reduce((s,f)=> s + f.data.length, 0);
+  const lotes = agruparEnLotes(zipFiles, LIMITE_ZIP_LOTE);
+  const fechaStr = new Date().toISOString().slice(0,10);
+
+  if(lotes.length > 1){
+    logDebug(`guardarOCompartirZipPorLotes: ${Math.round(totalBytes/1024/1024)}MB en total → se arma en ${lotes.length} ZIPs de hasta ${Math.round(LIMITE_ZIP_LOTE/1024/1024)}MB c/u.`);
+    toast(`Son ${Math.round(totalBytes/1024/1024)}MB en total — se va a guardar en ${lotes.length} partes para que no falle.`);
+  }
+
+  for(let i=0; i<lotes.length; i++){
+    const sufijo = lotes.length > 1 ? `-parte${i+1}de${lotes.length}` : "";
+    const zipName = zipNameBase + sufijo + "-" + fechaStr + ".zip";
+    const tituloParte = lotes.length > 1 ? `${shareTitle} (parte ${i+1}/${lotes.length})` : shareTitle;
+    const zipBlob = buildZip(lotes[i]);
+
+    let hecho = false;
+    if(isNativeApp()){
+      try{
+        hecho = await nativeSaveOrShare(zipBlob, zipName, {title: tituloParte, savedMessage:"ZIP guardado", folder: folder || "Tarjetas"});
+      }catch(err){
+        console.error("Fallo guardando de forma nativa, se intenta el método normal:", err);
+      }
+    }
+    if(!hecho){
+      try{
+        await descargarBlobCompat(zipBlob, zipName);
+        if(lotes.length > 1) toast(`Parte ${i+1} de ${lotes.length} descargada (${zipName})`);
+      }catch(err){
+        console.error("Fallo generando ZIP:", err);
+        toast(`No se pudo guardar la parte ${i+1} de ${lotes.length}. Intenta de nuevo o comparte tarjetas individuales.`);
+      }
+    }
+    // Pausa breve entre partes para que el teléfono libere memoria antes de armar la siguiente.
+    if(i < lotes.length - 1) await new Promise(r=>setTimeout(r, 400));
+  }
+
+  if(lotes.length > 1){
+    toast(`Listo: ${lotes.length} ZIPs guardados con ${zipFiles.length} archivos en total.`);
+  }
+}
+
 async function shareCardsOrDownloadZip(files, zipNameBase, shareTitle){
   if(!files.length) return;
 
-  if(isNativeApp()){
-    try{
-      const zipFiles = [];
-      for(const f of files){
-        const buf = new Uint8Array(await f.arrayBuffer());
-        zipFiles.push({name: f.name, data: buf});
-      }
-      const zipBlob = buildZip(zipFiles);
-      const zipName = zipNameBase + "-" + new Date().toISOString().slice(0,10) + ".zip";
-      if(await nativeSaveOrShare(zipBlob, zipName, {title: shareTitle, savedMessage:"ZIP guardado", folder:"Tarjetas"})) return;
-    }catch(err){
-      console.error("Fallo compartiendo de forma nativa, se intenta el método normal:", err);
-    }
-  }
-
-  let shared = false;
-  let canShareFiles = false;
-  try{ canShareFiles = !!(navigator.share && navigator.canShare && navigator.canShare({files})); }
-  catch(e){ canShareFiles = false; }
-
-  if(canShareFiles){
-    try{
-      await navigator.share({files, title: shareTitle});
-      shared = true;
-    }catch(e){
-      if(e && e.name === "AbortError"){
-        shared = true; // el usuario cerró el selector, no hacer nada más
-      } else {
+  // Fuera de la app empaquetada (navegador normal), primero se intenta
+  // compartir los archivos originales directo (sin armar ningún ZIP) —
+  // es la vía más simple cuando el selector nativo del navegador lo permite.
+  if(!isNativeApp()){
+    let canShareFiles = false;
+    try{ canShareFiles = !!(navigator.share && navigator.canShare && navigator.canShare({files})); }
+    catch(e){ canShareFiles = false; }
+    if(canShareFiles){
+      try{
+        await navigator.share({files, title: shareTitle});
+        return;
+      }catch(e){
+        if(e && e.name === "AbortError") return; // el usuario cerró el selector
         console.error("navigator.share falló:", e);
       }
     }
   }
-  if(shared) return;
 
-  try{
-    const zipFiles = [];
-    for(const f of files){
-      const buf = new Uint8Array(await f.arrayBuffer());
-      zipFiles.push({name: f.name, data: buf});
-    }
-    const zipBlob = buildZip(zipFiles);
-    await descargarBlobCompat(zipBlob, zipNameBase + "-" + new Date().toISOString().slice(0,10) + ".zip");
-    toast("Tu navegador no permite compartir varias imágenes directo. Se descargó un ZIP con las tarjetas para enviarlas por WhatsApp.");
-  }catch(err){
-    console.error("Fallo generando ZIP de tarjetas:", err);
-    toast("No se pudo compartir ni descargar. Prueba abriendo este archivo desde una carpeta normal (no desde Descargas) o comparte cada tarjeta con el botón 🖼️ del producto.");
+  const zipFiles = [];
+  for(const f of files){
+    const buf = new Uint8Array(await f.arrayBuffer());
+    zipFiles.push({name: f.name, data: buf});
   }
+  await guardarOCompartirZipPorLotes(zipFiles, zipNameBase, shareTitle, "Tarjetas");
 }
 
 qs("#btnOosShareWhatsapp").addEventListener("click", async () => {
@@ -8716,14 +8766,8 @@ qs("#btnExportAll").addEventListener("click", async ()=>{
     }
     btn.innerHTML = '<span class="spinner"></span> Armando ZIP...';
     await new Promise(r=>setTimeout(r, 0));
-    const zipBlob = buildZip(files);
-    const zipName = "catalogo-" + new Date().toISOString().slice(0,10) + ".zip";
-    if(await nativeSaveOrShare(zipBlob, zipName, {title:"Catálogo", savedMessage:"ZIP guardado", folder:"Tarjetas"})){
-      toast(files.length + " tarjetas exportadas");
-    }else{
-      await descargarBlobCompat(zipBlob, zipName);
-      toast(files.length + " tarjetas exportadas");
-    }
+    await guardarOCompartirZipPorLotes(files, "catalogo", "Catálogo", "Tarjetas");
+    toast(files.length + " tarjetas exportadas");
   }catch(e){
     console.error(e);
     toast("Ocurrió un error generando el ZIP");
