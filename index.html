@@ -3566,15 +3566,14 @@ async function generateSelectedCardFiles(btn, asDocument){
         files.push(new File([blob], name, {type:imeta.mime}));
       }
       productIds.push(p.id);
-      // Cada 8 tarjetas le damos un respiro corto al navegador (repinta el
-      // spinner, atiende toques). Cada 80, una pausa más larga: le da tiempo
-      // al teléfono a liberar la memoria de las imágenes ya usadas antes de
-      // seguir, para que no se sienta trabado en catálogos grandes.
+      // Cada tarjeta: pausa cortita para que el navegador procese eventos y el
+      // teléfono libere memoria. Cada 80, pausa más larga (300ms).
       if((idx+1) % 80 === 0 && idx+1 < selected.length){
         btn.innerHTML = `<span class="spinner"></span> Pausa breve (${idx+1}/${selected.length})...`;
         await new Promise(r=>setTimeout(r, 300));
-      }else if((idx+1) % 8 === 0){
-        await new Promise(r=>setTimeout(r, 0));
+      }else{
+        // 20ms es bastante para que el JS event loop procese pero sin ralentizar mucho
+        await new Promise(r=>setTimeout(r, 20));
       }
     }
     return { files, productIds };
@@ -4878,8 +4877,24 @@ async function renderCardToCanvas(canvas, product){
       img = await new Promise((resolve)=>{
         const image = new Image();
         const url = URL.createObjectURL(blob);
-        image.onload = ()=>{ URL.revokeObjectURL(url); resolve(image); };
-        image.onerror = ()=>{ URL.revokeObjectURL(url); resolve(null); };
+        // Timeout de 3 segundos para que la imagen cargue. Si la imagen
+        // tarda más, resolvemos con null para no bloquear toda la generación.
+        const timeout = setTimeout(() => {
+          URL.revokeObjectURL(url);
+          logDebug(`Timeout cargando imagen del producto "${product.name}" (${product.id})`);
+          resolve(null);
+        }, 3000);
+        image.onload = ()=>{
+          clearTimeout(timeout);
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = (e)=>{
+          clearTimeout(timeout);
+          URL.revokeObjectURL(url);
+          logDebug(`Error cargando imagen del producto "${product.name}" (${product.id}): ${e && e.message}`);
+          resolve(null);
+        };
         image.src = url;
       });
     }
@@ -4895,8 +4910,22 @@ async function renderCardToCanvas(canvas, product){
       const gimage = await new Promise((resolve)=>{
         const image = new Image();
         const url = URL.createObjectURL(gblob);
-        image.onload = ()=>{ URL.revokeObjectURL(url); resolve(image); };
-        image.onerror = ()=>{ URL.revokeObjectURL(url); resolve(null); };
+        const timeout = setTimeout(() => {
+          URL.revokeObjectURL(url);
+          logDebug(`Timeout cargando imagen de galería ${gi} del producto "${product.name}"`);
+          resolve(null);
+        }, 3000);
+        image.onload = ()=>{
+          clearTimeout(timeout);
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = (e)=>{
+          clearTimeout(timeout);
+          URL.revokeObjectURL(url);
+          logDebug(`Error cargando imagen de galería ${gi} del producto "${product.name}": ${e && e.message}`);
+          resolve(null);
+        };
         image.src = url;
       });
       if(gimage) galleryImgs.push(gimage);
@@ -8322,6 +8351,43 @@ function blobToBase64(blob){
   });
 }
 
+// El plugin Filesystem de Capacitor tiene que mandar el archivo entero,
+// convertido a texto (base64), de una sola vez al lado nativo de Android.
+// Con archivos chicos (una tarjeta) no pasa nada, pero con un PDF de
+// catálogo completo o un ZIP de cientos de tarjetas, ese texto puede pesar
+// decenas de MB — y ahí el puente entre JS y Android puede fallar en
+// silencio: tarda un buen rato y el archivo queda guardado vacío o
+// incompleto, sin ningún error visible.
+// La solución: escribirlo en pedacitos (2 MB crudos por vez), con
+// writeFile para el primero y appendFile para el resto, así nunca se manda
+// un texto gigante de una sola vez.
+const TAMANO_BLOQUE_ESCRITURA = 2 * 1024 * 1024; // 2 MB por bloque
+async function escribirArchivoPorBloques(Filesystem, relPath, blob, directory){
+  const total = blob.size;
+  // Archivos chicos: como siempre, un solo writeFile — no hace falta complicarlo.
+  if(total <= TAMANO_BLOQUE_ESCRITURA){
+    const base64 = await blobToBase64(blob);
+    return await Filesystem.writeFile({ path: relPath, data: base64, directory, recursive: true });
+  }
+  let offset = 0;
+  let primero = true;
+  while(offset < total){
+    const pedazo = blob.slice(offset, offset + TAMANO_BLOQUE_ESCRITURA);
+    const base64Pedazo = await blobToBase64(pedazo);
+    if(primero){
+      await Filesystem.writeFile({ path: relPath, data: base64Pedazo, directory, recursive: true });
+      primero = false;
+    }else{
+      // appendFile no devuelve la "uri" del archivo (a diferencia de
+      // writeFile), por eso la pedimos aparte con getUri al terminar.
+      await Filesystem.appendFile({ path: relPath, data: base64Pedazo, directory });
+    }
+    offset += TAMANO_BLOQUE_ESCRITURA;
+    logDebug(`Escribiendo por bloques "${relPath}": ${Math.min(offset,total)} / ${total} bytes`);
+  }
+  return await Filesystem.getUri({ path: relPath, directory });
+}
+
 // Descarga un blob de forma compatible con las apps empaquetadas en WebView
 // (AppMint, WebIntoApp, etc.) cuando nativeSaveOrShare no aplica (no es
 // Capacitor) y compartir tampoco funcionó. El truco de siempre — un <a> con
@@ -8365,6 +8431,13 @@ async function nativeSaveOrShare(blob, filename, opts){
     return false;
   }
   logDebug(`isNativeApp() = true → corriendo dentro del APK (Capacitor detectado).`, "ok");
+  
+  // Timeout de 8 segundos: si la escritura a Filesystem no responde en ese
+  // tiempo (archivo muy grande o problema del plugin), aborta y usa
+  // descargarBlobCompat en su lugar. No queda el usuario esperando
+  // indefinidamente.
+  const TIMEOUT_FILESYSTEM = 8000; // ms
+  
   try{
     const plugins = window.Capacitor.Plugins || {};
     const nombresPlugins = Object.keys(plugins).join(", ") || "(ninguno)";
@@ -8375,40 +8448,42 @@ async function nativeSaveOrShare(blob, filename, opts){
       logDebug(`El plugin "Filesystem" NO está instalado en la app. Hace falta agregar @capacitor/filesystem al proyecto y volver a compilar. Se usa el método del navegador mientras tanto.`, "error");
       return false;
     }
-    const base64 = await blobToBase64(blob);
+    
     const folder = opts.folder || "Otros";
     const relPath = `CatalogoWhatsApp/${folder}/${filename}`;
-    logDebug(`Escribiendo archivo en almacenamiento externo: ${relPath}`);
+    logDebug(`Escribiendo archivo en almacenamiento externo: ${relPath} (${blob.size > TAMANO_BLOQUE_ESCRITURA ? "por bloques, archivo grande" : "de una vez, archivo chico"})`);
 
-    // Guardamos en la carpeta privada de la app dentro del almacenamiento
-    // del celular ("External"). A diferencia de "EXTERNAL_STORAGE" y
-    // "Documents" (que fallan en silencio desde Android 10/11 por las
-    // restricciones de Google), esta SÍ funciona sin pedir permisos en
-    // cualquier versión de Android.
     let written = null;
     try{
-      written = await Filesystem.writeFile({
-        path: relPath,
-        data: base64,
-        directory: "EXTERNAL",
-        recursive: true
-      });
+      // Timeout: si la escritura tarda más de 8 segundos, algo anda mal.
+      // Aborta y usa descargarBlobCompat.
+      const promesaEscritura = escribirArchivoPorBloques(Filesystem, relPath, blob, "EXTERNAL");
+      written = await Promise.race([
+        promesaEscritura,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`TIMEOUT: escritura en EXTERNAL tardó más de ${TIMEOUT_FILESYSTEM}ms`)), TIMEOUT_FILESYSTEM))
+      ]);
       logDebug(`Escrito en EXTERNAL. uri: ${written && written.uri}`, "ok");
     }catch(extErr){
       logDebug(`Falló escribir en EXTERNAL (${extErr && extErr.message}). Se intenta en CACHE como respaldo.`, "error");
-      // Último recurso si algo raro pasa con el almacenamiento del celular.
       try{
-        written = await Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" });
+        const promesaCache = escribirArchivoPorBloques(Filesystem, filename, blob, "CACHE");
+        written = await Promise.race([
+          promesaCache,
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`TIMEOUT: escritura en CACHE tardó más de ${TIMEOUT_FILESYSTEM}ms`)), TIMEOUT_FILESYSTEM))
+        ]);
         logDebug(`Escrito en CACHE. uri: ${written && written.uri}`, "ok");
       }catch(cacheErr){
-        logDebug(`También falló escribir en CACHE (${cacheErr && cacheErr.message}). No se pudo guardar nada.`, "error");
+        logDebug(`También falló escribir en CACHE (${cacheErr && cacheErr.message}). No se pudo guardar nada — se intenta con descargarBlobCompat.`, "error");
         written = null;
       }
     }
 
     if(!written){
-      showSaveConfirm(false, "No se pudo guardar", "Filesystem.writeFile falló en EXTERNAL y en CACHE. Copia el registro (🐞) y compártelo.");
-      return false; // no se pudo guardar nada: seguimos con el método del navegador
+      logDebug(`nativeSaveOrShare: Filesystem agotó los intentos. Se usa descargarBlobCompat como fallback.`, "error");
+      // Fallback: si Filesystem falló completamente, usa descargarBlobCompat
+      // (que sí sabemos que funciona en tu entorno).
+      await descargarBlobCompat(blob, filename);
+      return true; // descargarBlobCompat ya mostró su propio mensaje
     }
 
     // Paso clave: abrir el selector nativo de Android para que el usuario
@@ -8615,16 +8690,14 @@ qs("#btnExportAll").addEventListener("click", async ()=>{
       while(usedNames.has(name)){ name = base + "-" + n + "." + imeta.ext; n++; }
       usedNames.add(name);
       files.push({name, data: buf});
-      // Cada 8 tarjetas le damos un respiro corto al navegador para que no
-      // se sienta "trabado" (repinta el spinner, procesa toques, etc.).
-      // Cada 80, una pausa más larga: le da tiempo al teléfono a liberar la
-      // memoria de las imágenes ya generadas antes de seguir — importante
-      // sobre todo en catálogos grandes dentro de la app empaquetada.
+      // Cada tarjeta: pequeña pausa para que el teléfono libere memoria y el
+      // navegador procese eventos. Cada 80, pausa más larga (300ms).
       if((i) % 80 === 0 && i < total){
         btn.innerHTML = `<span class="spinner"></span> Pausa breve (${i}/${total})...`;
         await new Promise(r=>setTimeout(r, 300));
-      }else if(i % 8 === 0){
-        await new Promise(r=>setTimeout(r, 0));
+      }else{
+        // 20ms por tarjeta, suficiente para que el evento loop no se congestione
+        await new Promise(r=>setTimeout(r, 20));
       }
     }
     btn.innerHTML = '<span class="spinner"></span> Armando ZIP...';
