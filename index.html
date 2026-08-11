@@ -968,8 +968,10 @@
       📌 Las fotos se guardan en el navegador, en este archivo/pestaña. Si abres una versión nueva del catálogo (otro archivo .html) o borras datos de navegación, las fotos NO se trasladan solas — usa la copia de seguridad para llevarlas contigo.
     </div>
     <div class="hint tip" style="margin-top:6px;">
-      📁 Al tocar "Copia de seguridad" se descarga un archivo .zip a la carpeta de <b>Descargas</b> de tu teléfono (la app no puede elegir otra carpeta directamente). Desde ahí puedes moverlo o copiarlo a Google Drive, una carpeta de Archivos, o donde prefieras guardarlo.
+      📁 Al tocar "Copia de seguridad" se descarga un archivo .zip. Con el permiso de almacenamiento activado, se guarda en la carpeta que elijas abajo (por defecto, <b>CatalogoWhatsApp</b> en el almacenamiento del teléfono).
     </div>
+    <button class="btn btn-block btn-ghost" id="btnPickFolder" style="margin-top:10px;">📁 Elegir carpeta de guardado</button>
+    <div class="hint" id="folderPickerCurrent" style="margin-top:4px;"></div>
     <div class="row" style="gap:8px;margin-top:10px;">
       <button class="btn btn-block" id="btnBackup">💾 Copia de seguridad</button>
       <button class="btn btn-block" id="btnRestore">📥 Restaurar copia</button>
@@ -1506,6 +1508,27 @@
   </div>
 </div>
 
+<!-- ===================== MODAL: ELEGIR CARPETA DE GUARDADO ===================== -->
+<div class="modal-overlay" id="modalFolderPicker">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>📁 Elegir carpeta de guardado</h3>
+    <div class="hint tip" style="margin:8px 0 12px;">Navega hasta la carpeta donde quieres que se guarden tus ZIPs, tarjetas y copias de seguridad. Se recuerda para la próxima vez.</div>
+    <div class="hint" id="folderPickerPath" style="word-break:break-all;margin-bottom:8px;font-weight:600;"></div>
+    <div id="folderPickerList" style="max-height:44vh;overflow-y:auto;border:1px solid #80808044;border-radius:10px;margin-bottom:12px;"></div>
+    <div id="folderPickerNewRow" style="display:none;gap:8px;margin-bottom:10px;" class="row">
+      <input type="text" id="folderPickerNewName" placeholder="Nombre de la carpeta" style="flex:1;">
+      <button class="btn" id="btnFolderNewConfirm">Crear</button>
+    </div>
+    <div class="row" style="gap:8px;">
+      <button class="btn btn-ghost btn-block" id="btnFolderUp">⬆️ Subir un nivel</button>
+      <button class="btn btn-ghost btn-block" id="btnFolderNew">➕ Nueva carpeta</button>
+    </div>
+    <button class="btn btn-primary btn-block" id="btnFolderChoose" style="margin-top:10px;">✅ Guardar aquí</button>
+    <button class="btn btn-block btn-ghost" id="btnFolderCancel" style="margin-top:8px;">Cancelar</button>
+  </div>
+</div>
+
 <!-- ===================== MODAL: CATÁLOGO PDF ===================== -->
 <div class="modal-overlay" id="modalPdf">
   <div class="modal">
@@ -1856,7 +1879,7 @@ function toast(msg){
    (para que el botón "atrás" del teléfono/navegador no cierre
    toda la app, sino que vuelva a la ventana o pestaña anterior)
    ============================================================ */
-const OVERLAY_IDS = ["modalProduct","modalCard","modalBulkPhotos","modalPdf","modalOosHistory","modalDuplicates","modalSavedLists","imgLightbox","photoActionSheet","modalCoverPreview","modalCombo","modalDebugLog"];
+const OVERLAY_IDS = ["modalProduct","modalCard","modalBulkPhotos","modalPdf","modalOosHistory","modalDuplicates","modalSavedLists","imgLightbox","photoActionSheet","modalCoverPreview","modalCombo","modalDebugLog","modalFolderPicker"];
 
 // Estado de "barra de acciones oculta" — se recuerda entre sesiones para que,
 // si José la ocultó para tener más pantalla, siga oculta la próxima vez.
@@ -8513,22 +8536,29 @@ async function nativeSaveOrShare(blob, filename, opts){
     }
     
     const folder = opts.folder || "Otros";
-    const relPath = `CatalogoWhatsApp/${folder}/${filename}`;
+    const carpetaBase = (state.config && state.config.carpetaGuardado) || "CatalogoWhatsApp";
+    const relPath = `${carpetaBase}/${folder}/${filename}`;
     const TAMANO_BLOQUE = getTamanoBloque(blob.size);
-    logDebug(`Escribiendo archivo en almacenamiento externo: ${relPath} (${blob.size > TAMANO_BLOQUE ? "por bloques, archivo grande" : "de una vez, archivo chico"}) — ${Math.round(blob.size/(1024*1024))}MB`);
+    // "EXTERNAL_STORAGE" apunta a la raíz del almacenamiento compartido del
+    // teléfono (/storage/emulated/0/...), la misma que ves en cualquier
+    // explorador de archivos normal. Necesita el permiso "Acceso a todos
+    // los archivos" (se pide una sola vez al abrir la app). Antes se usaba
+    // "EXTERNAL" (carpeta privada de la app, escondida desde Android 11),
+    // por eso costaba tanto encontrar los archivos guardados.
+    logDebug(`Escribiendo archivo en almacenamiento compartido: ${relPath} (${blob.size > TAMANO_BLOQUE ? "por bloques, archivo grande" : "de una vez, archivo chico"}) — ${Math.round(blob.size/(1024*1024))}MB`);
 
     let written = null;
     try{
       // Timeout: si la escritura tarda más de 8 segundos, algo anda mal.
       // Aborta y usa descargarBlobCompat.
-      const promesaEscritura = escribirArchivoPorBloques(Filesystem, relPath, blob, "EXTERNAL");
+      const promesaEscritura = escribirArchivoPorBloques(Filesystem, relPath, blob, "EXTERNAL_STORAGE");
       written = await Promise.race([
         promesaEscritura,
-        new Promise((_, reject) => setTimeout(() => reject(new Error(`TIMEOUT: escritura en EXTERNAL tardó más de ${TIMEOUT_FILESYSTEM}ms`)), TIMEOUT_FILESYSTEM))
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`TIMEOUT: escritura en EXTERNAL_STORAGE tardó más de ${TIMEOUT_FILESYSTEM}ms`)), TIMEOUT_FILESYSTEM))
       ]);
-      logDebug(`Escrito en EXTERNAL. uri: ${written && written.uri}`, "ok");
+      logDebug(`Escrito en EXTERNAL_STORAGE. uri: ${written && written.uri}`, "ok");
     }catch(extErr){
-      logDebug(`Falló escribir en EXTERNAL (${extErr && extErr.message}). Se intenta en CACHE como respaldo.`, "error");
+      logDebug(`Falló escribir en EXTERNAL_STORAGE (${extErr && extErr.message}). Se intenta en CACHE como respaldo.`, "error");
       try{
         const promesaCache = escribirArchivoPorBloques(Filesystem, filename, blob, "CACHE");
         written = await Promise.race([
@@ -9291,6 +9321,7 @@ function populateCoverPhotoSelect(){
 
 function loadConfigForm(){
   qs("#cfgStoreName").value = state.config.storeName || "";
+  updateFolderPickerCurrentLabel();
   qs("#cfgAddress").value = state.config.address || "";
   qs("#cfgOwnerName").value = state.config.ownerName || "";
   qs("#cfgEmail").value = state.config.email || "";
@@ -9904,6 +9935,122 @@ qs("#btnExportExcel").addEventListener("click", async ()=>{
     toast(`${state.products.length} productos exportados a CSV (se abre en Excel)`);
   }
 });
+
+/* ============================================================
+   SELECTOR DE CARPETA DE GUARDADO
+   Con el permiso "Acceso a todos los archivos" (MANAGE_EXTERNAL_STORAGE)
+   ya no hace falta un plugin nativo aparte para elegir carpeta: se puede
+   navegar el almacenamiento compartido directo con Filesystem.readdir
+   (que ya viene con @capacitor/filesystem) y guardar la ruta elegida en
+   state.config.carpetaGuardado. nativeSaveOrShare la usa como base en vez
+   de "CatalogoWhatsApp" a secas.
+   ============================================================ */
+let folderPickerPath = ""; // ruta relativa a /storage/emulated/0/ ("" = raíz)
+
+function updateFolderPickerCurrentLabel(){
+  const el = qs("#folderPickerCurrent");
+  if(!el) return;
+  const carpeta = state.config.carpetaGuardado || "CatalogoWhatsApp";
+  el.textContent = "Carpeta actual: /storage/emulated/0/" + carpeta;
+}
+
+async function folderPickerRender(path){
+  const listEl = qs("#folderPickerList");
+  const pathEl = qs("#folderPickerPath");
+  pathEl.textContent = "/storage/emulated/0/" + (path ? path + "/" : "");
+  listEl.innerHTML = '<div class="hint" style="padding:12px;">Cargando…</div>';
+  try{
+    const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+    const Filesystem = plugins.Filesystem;
+    if(!Filesystem){
+      listEl.innerHTML = '<div class="hint" style="padding:12px;">El plugin Filesystem no está disponible en esta app.</div>';
+      return;
+    }
+    const res = await Filesystem.readdir({ directory: "EXTERNAL_STORAGE", path });
+    const entradas = res.files || [];
+    // Filtra solo carpetas. En algunas versiones del plugin cada entrada trae
+    // "type" ("directory"/"file"); si no viene, se usa el objeto tal cual.
+    const carpetas = entradas
+      .filter(f => (typeof f === "object" && f.type) ? f.type === "directory" : true)
+      .map(f => (typeof f === "object" ? f.name : f))
+      .filter(Boolean)
+      .sort((a,b)=> a.localeCompare(b, "es", {sensitivity:"base"}));
+
+    if(carpetas.length === 0){
+      listEl.innerHTML = '<div class="hint" style="padding:12px;">(No hay subcarpetas aquí — puedes crear una con "➕ Nueva carpeta" o guardar directo en esta ubicación)</div>';
+      return;
+    }
+    listEl.innerHTML = "";
+    carpetas.forEach(name=>{
+      const row = document.createElement("div");
+      row.style.cssText = "padding:12px 14px;border-bottom:1px solid #80808022;cursor:pointer;";
+      row.textContent = "📁 " + name;
+      row.addEventListener("click", async ()=>{
+        folderPickerPath = path ? path + "/" + name : name;
+        await folderPickerRender(folderPickerPath);
+      });
+      listEl.appendChild(row);
+    });
+  }catch(err){
+    console.error("folderPickerRender falló:", err);
+    listEl.innerHTML = '<div class="hint" style="padding:12px;">No se pudo leer esta carpeta. Revisa que el permiso "Acceso a todos los archivos" esté activado en Ajustes del sistema para esta app.</div>';
+  }
+}
+
+qs("#btnPickFolder").addEventListener("click", async ()=>{
+  if(!isNativeApp()){
+    toast("Elegir carpeta solo está disponible dentro de la app instalada (APK), no en el navegador.");
+    return;
+  }
+  folderPickerPath = state.config.carpetaGuardado || "";
+  qs("#folderPickerNewRow").style.display = "none";
+  openOverlay("modalFolderPicker");
+  await folderPickerRender(folderPickerPath);
+});
+
+qs("#btnFolderUp").addEventListener("click", async ()=>{
+  if(!folderPickerPath){ toast("Ya estás en la raíz del almacenamiento"); return; }
+  const parts = folderPickerPath.split("/");
+  parts.pop();
+  folderPickerPath = parts.join("/");
+  await folderPickerRender(folderPickerPath);
+});
+
+qs("#btnFolderNew").addEventListener("click", ()=>{
+  const row = qs("#folderPickerNewRow");
+  const isOpen = row.style.display !== "none";
+  row.style.display = isOpen ? "none" : "flex";
+  if(!isOpen){ qs("#folderPickerNewName").value = ""; qs("#folderPickerNewName").focus(); }
+});
+
+qs("#btnFolderNewConfirm").addEventListener("click", async ()=>{
+  const nombre = qs("#folderPickerNewName").value.trim();
+  if(!nombre) return;
+  const nombreSeguro = nombre.replace(/[\\/:*?"<>|]/g, "-");
+  try{
+    const plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+    const Filesystem = plugins.Filesystem;
+    const nuevaRuta = folderPickerPath ? folderPickerPath + "/" + nombreSeguro : nombreSeguro;
+    await Filesystem.mkdir({ directory: "EXTERNAL_STORAGE", path: nuevaRuta, recursive: true });
+    folderPickerPath = nuevaRuta;
+    qs("#folderPickerNewRow").style.display = "none";
+    await folderPickerRender(folderPickerPath);
+    toast("Carpeta creada");
+  }catch(err){
+    console.error("Fallo creando carpeta:", err);
+    toast("No se pudo crear la carpeta (puede que ya exista)");
+  }
+});
+
+qs("#btnFolderChoose").addEventListener("click", ()=>{
+  state.config.carpetaGuardado = folderPickerPath || "CatalogoWhatsApp";
+  saveState();
+  updateFolderPickerCurrentLabel();
+  closeOverlay("modalFolderPicker");
+  toast("Carpeta de guardado actualizada");
+});
+
+qs("#btnFolderCancel").addEventListener("click", ()=> closeOverlay("modalFolderPicker"));
 
 qs("#btnBackup").addEventListener("click", async ()=>{
   const btn = qs("#btnBackup");
