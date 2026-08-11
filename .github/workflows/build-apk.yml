@@ -51,6 +51,133 @@ jobs:
       - name: Agregar la plataforma Android
         run: npx cap add android
 
+      # "npx cap add android" genera la carpeta android/ de cero en cada build,
+      # así que cualquier permiso que se agregue a mano en AndroidManifest.xml
+      # se perdería en la próxima compilación. Por eso este paso lo agrega con
+      # un script, DESPUÉS de generar la carpeta y ANTES de compilar — así
+      # queda metido en todos los builds futuros sin que haga falta tocarlo
+      # de nuevo.
+      #
+      # Qué hace: agrega el permiso "Acceso a todos los archivos"
+      # (MANAGE_EXTERNAL_STORAGE) al manifest, y el código en MainActivity
+      # que pide ese permiso la primera vez que se abre la app (se abre una
+      # pantalla de Ajustes de Android, el usuario activa un interruptor, y
+      # ya no se vuelve a pedir). Con este permiso los archivos se guardan
+      # en /storage/emulated/0/CatalogoWhatsApp/... — visibles en cualquier
+      # explorador de archivos normal, sin selectores ni carpetas escondidas.
+      - name: Agregar permiso de acceso a todos los archivos (almacenamiento interno y externo)
+        run: |
+          python3 - <<'PYEOF'
+          import re, glob
+
+          # ---- 1) AndroidManifest.xml: agrega los permisos ----
+          manifest_path = "android/app/src/main/AndroidManifest.xml"
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              manifest = f.read()
+
+          if 'xmlns:tools=' not in manifest:
+              manifest = manifest.replace(
+                  "<manifest ",
+                  '<manifest xmlns:tools="http://schemas.android.com/tools" ',
+                  1
+              )
+
+          permisos = (
+              '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
+              '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
+              '    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />\n'
+          )
+          if "MANAGE_EXTERNAL_STORAGE" not in manifest:
+              manifest = re.sub(r"[ \t]*<application", permisos + "    <application", manifest, count=1)
+
+          if "android:requestLegacyExternalStorage" not in manifest:
+              manifest = re.sub(
+                  r"<application ",
+                  '<application android:requestLegacyExternalStorage="true" ',
+                  manifest,
+                  count=1
+              )
+
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              f.write(manifest)
+          print("AndroidManifest.xml: permisos agregados.")
+
+          # ---- 2) MainActivity: pide el permiso especial al abrir la app ----
+          candidatos = glob.glob("android/app/src/main/java/**/MainActivity.java", recursive=True)
+          if not candidatos:
+              raise SystemExit("No se encontró MainActivity.java — revisa la ruta.")
+          main_path = candidatos[0]
+          with open(main_path, "r", encoding="utf-8") as f:
+              java = f.read()
+
+          imports_necesarios = [
+              "import android.os.Bundle;",
+              "import android.os.Build;",
+              "import android.os.Environment;",
+              "import android.content.Intent;",
+              "import android.net.Uri;",
+          ]
+          lineas = java.split("\n")
+          idx_package = next(i for i, l in enumerate(lineas) if l.startswith("package "))
+          for imp in reversed(imports_necesarios):
+              if imp not in java:
+                  lineas.insert(idx_package + 1, imp)
+          java = "\n".join(lineas)
+
+          metodo = (
+              "\n"
+              "    private void pedirAccesoTodosLosArchivos() {\n"
+              "        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {\n"
+              "            if (!Environment.isExternalStorageManager()) {\n"
+              "                try {\n"
+              "                    Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);\n"
+              "                    intent.setData(Uri.parse(\"package:\" + getPackageName()));\n"
+              "                    startActivity(intent);\n"
+              "                } catch (Exception e) {\n"
+              "                    startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));\n"
+              "                }\n"
+              "            }\n"
+              "        }\n"
+              "    }\n"
+          )
+
+          if "pedirAccesoTodosLosArchivos" not in java:
+              ultima_llave = java.rfind("}")
+              java = java[:ultima_llave] + metodo + java[ultima_llave:]
+
+          if re.search(r"(protected|public)\s+void\s+onCreate\s*\(", java):
+              # Ya existe onCreate: se agrega la llamada justo después de super.onCreate(...)
+              nueva_java, n = re.subn(
+                  r"(super\.onCreate\([^)]*\);)",
+                  r"\1\n        pedirAccesoTodosLosArchivos();",
+                  java,
+                  count=1
+              )
+              if n == 0:
+                  raise SystemExit("No se encontró super.onCreate(...) en MainActivity.java")
+              java = nueva_java
+          else:
+              # No existe onCreate (plantilla vacía "extends BridgeActivity {}"): se agrega completo.
+              onCreateNuevo = (
+                  "\n"
+                  "    @Override\n"
+                  "    protected void onCreate(Bundle savedInstanceState) {\n"
+                  "        super.onCreate(savedInstanceState);\n"
+                  "        pedirAccesoTodosLosArchivos();\n"
+                  "    }\n"
+              )
+              java = re.sub(
+                  r"(class\s+MainActivity\s+extends\s+BridgeActivity\s*\{)",
+                  lambda m: m.group(1) + onCreateNuevo,
+                  java,
+                  count=1
+              )
+
+          with open(main_path, "w", encoding="utf-8") as f:
+              f.write(java)
+          print(f"MainActivity actualizado en: {main_path}")
+          PYEOF
+
       - name: Generar el icono de la app desde resources/icon.png
         run: npx capacitor-assets generate --android
 
