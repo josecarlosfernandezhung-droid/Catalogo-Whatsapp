@@ -964,6 +964,10 @@
   <div class="card">
     <h3 style="margin-bottom:8px;">Datos y almacenamiento</h3>
     <div class="hint" id="storageInfo">Calculando uso de espacio...</div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn btn-sm" id="btnClearCardCache">🗑️ Vaciar caché de tarjetas</button>
+    </div>
+    <div class="hint tip" style="margin-top:6px;">Las tarjetas ya generadas se guardan en caché para que exportar de nuevo sea más rápido (no se vuelven a dibujar si nada cambió). Si notas alguna tarjeta desactualizada, vacía la caché aquí.</div>
     <div class="hint tip" style="margin-top:10px;">
       📌 Las fotos se guardan en el navegador, en este archivo/pestaña. Si abres una versión nueva del catálogo (otro archivo .html) o borras datos de navegación, las fotos NO se trasladan solas — usa la copia de seguridad para llevarlas contigo.
     </div>
@@ -1749,16 +1753,99 @@ window.addEventListener("pagehide", flushSaveState);
 window.addEventListener("beforeunload", flushSaveState);
 
 /* ---- IndexedDB para fotos (evita llenar localStorage) ---- */
+const DB_STORE_CARDS = "cardCache"; // caché de tarjetas ya renderizadas (bytes + firma)
 let dbPromise = null;
 function openDB(){
   if(dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject)=>{
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = ()=>{ req.result.createObjectStore(DB_STORE); };
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+      if(!db.objectStoreNames.contains(DB_STORE_CARDS)) db.createObjectStore(DB_STORE_CARDS);
+    };
     req.onsuccess = ()=> resolve(req.result);
     req.onerror = ()=> reject(req.error);
   });
   return dbPromise;
+}
+
+/* ---- Caché de tarjetas ----
+   Guarda, por producto, la última tarjeta ya generada (bytes + nombre + tipo)
+   junto con una "firma" de todo lo que influye en el dibujo (datos del
+   producto, config global de tarjetas y tamaño de la foto). Si al exportar
+   de nuevo la firma no cambió, se reusa la tarjeta guardada en vez de
+   volver a dibujarla y comprimirla — eso es lo que hace que exportar de
+   nuevo un catálogo grande (donde solo cambiaron unos pocos productos) sea
+   mucho más rápido. */
+async function getCachedCard(id){
+  const db = await openDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(DB_STORE_CARDS, "readonly");
+    const req = tx.objectStore(DB_STORE_CARDS).get(id);
+    req.onsuccess = ()=> resolve(req.result || null);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function setCachedCard(id, entry){
+  const db = await openDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(DB_STORE_CARDS, "readwrite");
+    tx.objectStore(DB_STORE_CARDS).put(entry, id);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+// Borra del caché las entradas de productos que ya no existen, para que no
+// crezca sin límite con el tiempo (se llama antes de cada exportación grande).
+async function pruneCardCache(validIds){
+  try{
+    const db = await openDB();
+    const idSet = new Set(validIds);
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(DB_STORE_CARDS, "readwrite");
+      const store = tx.objectStore(DB_STORE_CARDS);
+      const req = store.openCursor();
+      req.onsuccess = ()=>{
+        const cursor = req.result;
+        if(!cursor){ resolve(); return; }
+        if(!idSet.has(cursor.key)) cursor.delete();
+        cursor.continue();
+      };
+      req.onerror = ()=> reject(req.error);
+    });
+  }catch(e){ console.error("Error limpiando caché de tarjetas", e); }
+}
+async function clearCardCache(){
+  const db = await openDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(DB_STORE_CARDS, "readwrite");
+    tx.objectStore(DB_STORE_CARDS).clear();
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+// Firma de todo lo que puede cambiar el dibujo de la tarjeta de un producto:
+// sus propios datos + la config global de tarjetas + el tamaño de su foto
+// (si la foto se reemplaza por otra de distinto tamaño, ya no calza).
+function computeCardSignature(product, cfg, photoSize, gallerySizes){
+  const p = {
+    name: product.name, price: product.price, priceUSD: product.priceUSD, priceEUR: product.priceEUR,
+    currency: product.currency, description: product.description, available: product.available,
+    isNew: product.isNew, oferta: product.oferta, discount: product.discount, badges: product.badges,
+    urgencyLabel: product.urgencyLabel, cardStyleOverride: product.cardStyleOverride,
+    cardFormatOverride: product.cardFormatOverride, useMosaic: product.useMosaic,
+    galleryCount: product.galleryCount, hasPhoto: product.hasPhoto, stock: product.stock,
+    cornerOverrides: product.cornerOverrides, photoSize, gallerySizes
+  };
+  const c = {
+    cardStyle: cfg.cardStyle, format: cfg.format, exportQuality: cfg.exportQuality,
+    accentColor: cfg.accentColor, watermarkText: cfg.watermarkText, watermarkEnabled: cfg.watermarkEnabled,
+    currencyDisplay: cfg.currencyDisplay, exchangeRateUSD: cfg.exchangeRateUSD, exchangeRateEUR: cfg.exchangeRateEUR,
+    storeName: cfg.storeName, storeLogo: cfg.storeLogo, showCashDiscount: cfg.showCashDiscount,
+    cashDiscountPct: cfg.cashDiscountPct, cardTuning: cfg.cardTuning, fontStyle: cfg.fontStyle
+  };
+  return JSON.stringify([p, c]);
 }
 async function setPhoto(id, blob){
   const db = await openDB();
@@ -3616,6 +3703,7 @@ async function generateSelectedCardFiles(btn, asDocument){
 
   const originalText = btn.textContent;
   btn.disabled = true;
+  await requestCardWakeLock();
   try{
     const canvas = document.createElement("canvas");
     const files = [];
@@ -3624,19 +3712,13 @@ async function generateSelectedCardFiles(btn, asDocument){
     for(let idx=0; idx<selected.length; idx++){
       const p = selected[idx];
       btn.innerHTML = `<span class="spinner"></span> Generando tarjetas ${idx+1}/${selected.length}...`;
-      await renderCardToCanvas(canvas, p);
-      const blob = await canvasToBlob(canvas);
-      const imeta = exportImageMeta();
-      let base = safeFileName(p.name);
-      let name = base + "." + imeta.ext;
-      let i = 2;
-      while(usedNames.has(name)){ name = base + "-" + i + "." + imeta.ext; i++; }
-      usedNames.add(name);
+      const card = await getOrRenderCard(canvas, p, usedNames); // usa la caché si nada cambió: mucho más rápido
+      const name = card.name;
       if(asDocument){
-        const docBlob = new Blob([blob], {type:"application/octet-stream"});
+        const docBlob = new Blob([card.data], {type:"application/octet-stream"});
         files.push(new File([docBlob], name, {type:"application/octet-stream"}));
       } else {
-        files.push(new File([blob], name, {type:imeta.mime}));
+        files.push(new File([card.data], name, {type:card.mime}));
       }
       productIds.push(p.id);
       // Cada tarjeta: pausa cortita para que el navegador procese eventos y el
@@ -3657,6 +3739,7 @@ async function generateSelectedCardFiles(btn, asDocument){
   }finally{
     btn.textContent = originalText;
     btn.disabled = false;
+    await releaseCardWakeLock();
   }
 }
 
@@ -4917,6 +5000,60 @@ function getProductAccentColor(product, cfg){
     return palette[hashStringToIndex(product.id, palette.length)];
   }
   return palette[0];
+}
+
+// Pide que la pantalla no se apague mientras se generan tarjetas (para que el
+// proceso no se corte a mitad de camino). No es "segundo plano" real — si el
+// usuario minimiza la app, Android igual pausa el WebView y no hay forma de
+// evitarlo desde una página web — pero evita el corte más común, que es que
+// se apague la pantalla mientras el teléfono está sobre la mesa.
+let _wakeLock = null;
+async function requestCardWakeLock(){
+  try{
+    if("wakeLock" in navigator){ _wakeLock = await navigator.wakeLock.request("screen"); }
+  }catch(e){ /* no disponible en este navegador/WebView, seguimos igual */ }
+}
+async function releaseCardWakeLock(){
+  try{ if(_wakeLock){ await _wakeLock.release(); _wakeLock = null; } }catch(e){}
+}
+
+// Genera (o reusa del caché) los bytes finales de la tarjeta de un producto,
+// listos para meter en un ZIP o compartir. Devuelve {name, mime, ext, data}.
+// Si nada relevante cambió desde la última vez, ni siquiera se vuelve a
+// dibujar el canvas — se toma directo del caché, que es lo que hace que
+// re-exportar catálogos grandes sea mucho más rápido.
+async function getOrRenderCard(canvas, product, usedNames){
+  const cfg = state.config;
+  const photoBlob = product.hasPhoto ? await getPhoto(product.id) : null;
+  let gallerySizes = null;
+  if(product.useMosaic && product.galleryCount){
+    gallerySizes = [];
+    for(let gi=0; gi<product.galleryCount; gi++){
+      const gb = await getPhoto(galleryKey(product.id, gi));
+      gallerySizes.push(gb ? gb.size : 0);
+    }
+  }
+  const sig = computeCardSignature(product, cfg, photoBlob ? photoBlob.size : 0, gallerySizes);
+
+  const cached = await getCachedCard(product.id).catch(()=>null);
+  let data, mime, ext;
+  if(cached && cached.sig === sig){
+    data = cached.data; mime = cached.mime; ext = cached.ext;
+  }else{
+    await renderCardToCanvas(canvas, product);
+    const blob = await canvasToBlob(canvas);
+    const imeta = exportImageMeta();
+    data = new Uint8Array(await blob.arrayBuffer());
+    mime = imeta.mime; ext = imeta.ext;
+    setCachedCard(product.id, {sig, data, mime, ext}).catch(e=>console.error("No se pudo cachear tarjeta", e));
+  }
+
+  let base = safeFileName(product.name);
+  let name = base + "." + ext;
+  let n = 2;
+  while(usedNames.has(name)){ name = base + "-" + n + "." + ext; n++; }
+  usedNames.add(name);
+  return {name, mime, ext, data};
 }
 
 async function renderCardToCanvas(canvas, product){
@@ -8759,51 +8896,65 @@ function buildZip(files){
   return new Blob([...localParts, ...centralParts, new Uint8Array(end.buffer)], {type:"application/zip"});
 }
 
+// Tamaño del lote de guardado: cada 80 productos se arma y se guarda un ZIP
+// aparte, en vez de acumular todo en memoria hasta el final. Esto hace que:
+//  - el teléfono nunca tenga que sostener en RAM las 500+ tarjetas juntas
+//    (solo el lote actual), lo que evita cuelgues en catálogos grandes;
+//  - la primera parte quede guardada mucho antes, sin esperar a que termine
+//    TODO el catálogo para recién empezar a escribir en el disco;
+//  - si algo falla a mitad de camino, ya quedan guardadas las partes previas.
+const LOTE_GUARDADO = 80;
+
 qs("#btnExportAll").addEventListener("click", async ()=>{
   if(state.products.length === 0){ toast("No hay productos para exportar"); return; }
   const btn = qs("#btnExportAll");
   const originalText = btn.textContent;
   btn.disabled = true;
+  await requestCardWakeLock();
 
   try{
+    pruneCardCache(state.products.map(p=>p.id)); // no esperamos, corre de fondo
+
     const canvas = document.createElement("canvas");
-    const files = [];
     const usedNames = new Set();
     const total = state.products.length;
-    let i = 0;
-    for(const p of state.products){
-      i++;
-      btn.innerHTML = `<span class="spinner"></span> Generando ${i}/${total}...`;
-      await renderCardToCanvas(canvas, p);
-      const blob = await canvasToBlob(canvas);
-      const imeta = exportImageMeta();
-      const buf = new Uint8Array(await blob.arrayBuffer());
-      let base = safeFileName(p.name);
-      let name = base + "." + imeta.ext;
-      let n = 2;
-      while(usedNames.has(name)){ name = base + "-" + n + "." + imeta.ext; n++; }
-      usedNames.add(name);
-      files.push({name, data: buf});
-      // Cada tarjeta: pequeña pausa para que el teléfono libere memoria y el
-      // navegador procese eventos. Cada 80, pausa más larga (300ms).
-      if((i) % 80 === 0 && i < total){
-        btn.innerHTML = `<span class="spinner"></span> Pausa breve (${i}/${total})...`;
-        await new Promise(r=>setTimeout(r, 300));
-      }else{
-        // 20ms por tarjeta, suficiente para que el evento loop no se congestione
-        await new Promise(r=>setTimeout(r, 20));
+    const totalPartes = Math.ceil(total / LOTE_GUARDADO);
+    let lote = [];
+    let parte = 0;
+    let exportadas = 0;
+
+    for(let i=0; i<total; i++){
+      const p = state.products[i];
+      btn.innerHTML = `<span class="spinner"></span> Generando ${i+1}/${total}...`;
+
+      const card = await getOrRenderCard(canvas, p, usedNames);
+      lote.push({name: card.name, data: card.data});
+      exportadas++;
+
+      const esUltimoDeTotal = (i+1) === total;
+      const loteLleno = lote.length >= LOTE_GUARDADO;
+
+      if(loteLleno || esUltimoDeTotal){
+        parte++;
+        btn.innerHTML = `<span class="spinner"></span> Guardando parte ${parte}/${totalPartes}...`;
+        const sufijo = totalPartes > 1 ? `-lote${parte}de${totalPartes}` : "";
+        await guardarOCompartirZipPorLotes(lote, "catalogo" + sufijo, `Catálogo (${parte}/${totalPartes})`, "Tarjetas");
+        lote = []; // libera la memoria del lote ya guardado antes de seguir
       }
+
+      // Pausa cortita entre tarjetas para que el navegador procese eventos;
+      // ya no hace falta la pausa larga cada 80, porque el guardado del lote
+      // mismo le da ese respiro al teléfono.
+      await new Promise(r=>setTimeout(r, 15));
     }
-    btn.innerHTML = '<span class="spinner"></span> Armando ZIP...';
-    await new Promise(r=>setTimeout(r, 0));
-    await guardarOCompartirZipPorLotes(files, "catalogo", "Catálogo", "Tarjetas");
-    toast(files.length + " tarjetas exportadas");
+    toast(`${exportadas} tarjetas exportadas en ${totalPartes} ZIP${totalPartes>1?"s":""}`);
   }catch(e){
     console.error(e);
     toast("Ocurrió un error generando el ZIP");
   }finally{
     btn.textContent = originalText;
     btn.disabled = false;
+    await releaseCardWakeLock();
   }
 });
 
@@ -10115,6 +10266,7 @@ qs("#restoreInput").addEventListener("change", async (e)=>{
     const parsed = JSON.parse(new TextDecoder().decode(zipFiles["datos.json"]));
 
     await clearAllPhotos();
+    await clearCardCache();
     state.config = Object.assign({}, state.config, parsed.config || {});
     state.products = parsed.products || [];
     state.products.forEach(p=>{ if(p.available === undefined) p.available = true; });
@@ -10143,6 +10295,22 @@ qs("#restoreInput").addEventListener("change", async (e)=>{
   btn.disabled = false;
 });
 
+qs("#btnClearCardCache").addEventListener("click", async ()=>{
+  const btn = qs("#btnClearCardCache");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Vaciando...';
+  try{
+    await clearCardCache();
+    toast("Caché de tarjetas vaciada");
+  }catch(e){
+    console.error(e);
+    toast("No se pudo vaciar la caché");
+  }
+  btn.textContent = original;
+  btn.disabled = false;
+});
+
 async function updateStorageInfo(){
   try{
     if(navigator.storage && navigator.storage.estimate){
@@ -10164,6 +10332,7 @@ qs("#btnWipeAll").addEventListener("click", async ()=>{
   if(saveStateTimer){ clearTimeout(saveStateTimer); saveStateTimer = null; }
   localStorage.removeItem(LS_KEY);
   await clearAllPhotos();
+  await clearCardCache();
   clearAllPhotoUrls();
   state = { config:{storeName:"Mi Tienda", address:"", phone:"", extraInfo:"", tagline:"", warrantyText:"", coverStyle:"oscuro", currency:"USD", primaryColor:"#16a34a", format:"square", cardStyle:"clasica", fontStyle:"moderna", includeOutOfStock:false, hideOutOfStock:false, groupByCategory:false, includeNewSection:false, logo:null}, products:[], oosSnapshot:null, oosHistory:[], savedLists:[], shareEvents:[] };
   loadConfigForm();
